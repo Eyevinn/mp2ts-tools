@@ -1,0 +1,24 @@
+{
+    "markdownlint.config": {
+        "MD024": {
+            "siblings_only": true
+        },
+        "MD041": false,
+        "MD046": false
+    },
+    "cSpell.words": [
+        "asticode",
+        "astits",
+        "AVCPES",
+        "Demuxer",
+        "Eyevinn",
+        "golangci",
+        "NALU",
+        "nalus",
+        "PPSNAL",
+        "ppsnalus",
+        "spsnalu",
+        "spss",
+        "stretchr"
+    ]
+}

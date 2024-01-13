@@ -1,0 +1,15 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the make coverage target
+coverage.*
+
+# Dependency directories (remove the comment below to include it)
+vendor/
