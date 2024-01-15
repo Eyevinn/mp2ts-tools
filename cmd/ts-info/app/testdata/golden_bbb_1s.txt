@@ -13,7 +13,7 @@
 {"pid":256,"rai":false,"pts":159750,"dts":156000,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":150}]}
 {"pid":256,"rai":false,"pts":167250,"dts":159750,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":315}]}
 {"pid":256,"rai":false,"pts":171000,"dts":163500,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":679}]}
-SDT: service_id: 1, service_name: ts-info, provider_name: Eyevinn Technology
+{"SDT":[{"serviceId":1,"descriptors":[{"serviceName":"ts-info","providerName":"Eyevinn Technology"}]}]}
 {"pid":256,"rai":false,"pts":174750,"dts":167250,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":1718}]}
 {"pid":256,"rai":false,"pts":182250,"dts":171000,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":918}]}
 {"pid":256,"rai":false,"pts":178500,"dts":174750,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":506}]}

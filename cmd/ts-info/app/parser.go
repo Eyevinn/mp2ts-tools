@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/asticode/go-astits"
 )
@@ -26,6 +25,20 @@ type elementaryStream struct {
 	PID   uint16 `json:"pid"`
 	Codec string `json:"codec"`
 	Type  string `json:"type"`
+}
+
+type sdtServiceDescriptor struct {
+	ServiceName  string `json:"serviceName"`
+	ProviderName string `json:"providerName"`
+}
+
+type sdtService struct {
+	ServiceID   uint16                 `json:"serviceId"`
+	Descriptors []sdtServiceDescriptor `json:"descriptors"`
+}
+
+type sdtInfo struct {
+	SdtServices []sdtService `json:"SDT"`
 }
 
 type jsonPrinter struct {
@@ -75,21 +88,11 @@ dataLoop:
 			return fmt.Errorf("reading next data %w", err)
 		}
 		if d.SDT != nil && !sdtPrinted {
-			parts := make([]string, 0, 4)
-			for _, s := range d.SDT.Services {
-				parts = append(parts, fmt.Sprintf("service_id: %d", s.ServiceID))
-				for _, d := range s.Descriptors {
-					switch d.Tag {
-					case astits.DescriptorTagService:
-						sd := d.Service
-						parts = append(parts, fmt.Sprintf("service_name: %s", string(sd.Name)))
-						parts = append(parts, fmt.Sprintf("provider_name: %s", string(sd.Provider)))
-					}
-				}
-			}
-			fmt.Fprintf(w, "SDT: %s\n", strings.Join(parts, ", "))
+			sdtInfo := toSdtInfo(d.SDT)
+			jp.print(sdtInfo)
 			sdtPrinted = true
 		}
+
 		if pmtPID < 0 && d.PMT != nil {
 			// Loop through elementary streams
 			for _, es := range d.PMT.ElementaryStreams {
@@ -135,4 +138,40 @@ dataLoop:
 		}
 	}
 	return jp.error()
+}
+
+func toSdtInfo(sdt *astits.SDTData) sdtInfo {
+	sdtInfo := sdtInfo{
+		SdtServices: make([]sdtService, 0, len(sdt.Services)),
+	}
+
+	for _, s := range sdt.Services {
+		sdtService := toSdtService(s)
+		sdtInfo.SdtServices = append(sdtInfo.SdtServices, sdtService)
+	}
+
+	return sdtInfo
+}
+
+func toSdtService(s *astits.SDTDataService) sdtService {
+	sdtService := sdtService{
+		ServiceID:   s.ServiceID,
+		Descriptors: make([]sdtServiceDescriptor, 0, len(s.Descriptors)),
+	}
+
+	for _, d := range s.Descriptors {
+		if d.Tag == astits.DescriptorTagService {
+			sdtServiceDescriptor := toSdtServiceDescriptor(d.Service)
+			sdtService.Descriptors = append(sdtService.Descriptors, sdtServiceDescriptor)
+		}
+	}
+
+	return sdtService
+}
+
+func toSdtServiceDescriptor(sd *astits.DescriptorService) sdtServiceDescriptor {
+	return sdtServiceDescriptor{
+		ProviderName: string(sd.Provider),
+		ServiceName:  string(sd.Name),
+	}
 }
