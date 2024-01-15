@@ -2,13 +2,112 @@ package app
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
-	"log"
+	"strings"
 
 	"github.com/Eyevinn/mp4ff/avc"
+	"github.com/Eyevinn/mp4ff/sei"
+	"github.com/asticode/go-astits"
 )
+
+type avcFrameData struct {
+	PID   uint16    `json:"pid"`
+	RAI   bool      `json:"rai"`
+	PTS   int64     `json:"pts"`
+	DTS   *int64    `json:"dts,omitempty"`
+	NALUS []avcNALU `json:"nalus"`
+}
+
+type avcNALU struct {
+	Type string `json:"type"`
+	Len  int    `json:"len"`
+	Data string `json:"data,omitempty"`
+}
+
+func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, verbose bool) (*avcPS, error) {
+	pid := d.PID
+	pes := d.PES
+	fp := d.FirstPacket
+	if pes.Header.OptionalHeader.PTS == nil {
+		return nil, fmt.Errorf("no PTS in PES")
+	}
+	ad := avcFrameData{
+		PID: pid,
+	}
+	if fp != nil {
+		af := fp.AdaptationField
+		if af != nil {
+			ad.RAI = af.RandomAccessIndicator
+		}
+	}
+	pts := *pes.Header.OptionalHeader.PTS
+	data := pes.Data
+	ad.PTS = pts.Base
+
+	dts := pes.Header.OptionalHeader.DTS
+	if dts != nil {
+		ad.DTS = &dts.Base
+	}
+	nalus := avc.ExtractNalusFromByteStream(data)
+	firstPS := false
+	for _, nalu := range nalus {
+		var seiMsg string
+		naluType := avc.GetNaluType(nalu[0])
+		switch naluType {
+		case avc.NALU_SPS:
+			if ps == nil && !firstPS {
+				ps = &avcPS{}
+				err := ps.setSPS(nalu)
+				if err != nil {
+					return nil, fmt.Errorf("cannot set SPS")
+				}
+				firstPS = true
+			}
+		case avc.NALU_PPS:
+			if firstPS {
+				err := ps.setPPS(nalu)
+				if err != nil {
+					return nil, fmt.Errorf("cannot set PPS")
+				}
+			}
+		case avc.NALU_SEI:
+			var sps *avc.SPS
+			if ps != nil {
+				sps = ps.getSPS()
+			}
+			msgs, err := avc.ParseSEINalu(nalu, sps)
+			if err != nil {
+				return nil, err
+			}
+			seiTexts := make([]string, 0, len(msgs))
+			for _, msg := range msgs {
+				if msg.Type() == sei.SEIPicTimingType {
+					pt := msg.(*sei.PicTimingAvcSEI)
+					seiTexts = append(seiTexts, fmt.Sprintf("Type 1: %s", pt.Clocks[0]))
+				}
+			}
+			seiMsg = strings.Join(seiTexts, ", ")
+		}
+		ad.NALUS = append(ad.NALUS, avcNALU{
+			Type: naluType.String(),
+			Len:  len(nalu),
+			Data: seiMsg,
+		})
+	}
+	if ps == nil {
+		return nil, nil
+	}
+	if firstPS {
+		for nr := range ps.spss {
+			printPS(jp, pid, "SPS", nr, ps.spsnalu, ps.spss[nr], verbose)
+		}
+		for nr := range ps.ppss {
+			printPS(jp, pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], verbose)
+		}
+	}
+	jp.print(ad)
+	return ps, jp.error()
+}
 
 type avcPS struct {
 	spss     map[uint32]*avc.SPS
@@ -49,15 +148,27 @@ func (a *avcPS) setPPS(nalu []byte) error {
 	return nil
 }
 
-func printPS(w io.Writer, name string, nr uint32, ps []byte, psInfo any, verbose bool) {
+type psInfo struct {
+	PID          uint16 `json:"pid"`
+	ParameterSet string `json:"parameterSet"`
+	Nr           uint32 `json:"nr"`
+	Hex          string `json:"hex"`
+	Length       int    `json:"length"`
+	Details      any    `json:"details,omitempty"`
+}
+
+func printPS(jp *jsonPrinter, pid uint16, psKind string, nr uint32, ps []byte, details any, verbose bool) {
 	hexStr := hex.EncodeToString(ps)
 	length := len(hexStr) / 2
-	fmt.Fprintf(w, "%s %d len %dB: %+v\n", name, nr, length, hexStr)
-	if verbose && psInfo != nil {
-		jsonPS, err := json.MarshalIndent(psInfo, "", "  ")
-		if err != nil {
-			log.Fatalf(err.Error())
-		}
-		fmt.Fprintf(w, "%s\n", string(jsonPS))
+	psInfo := psInfo{
+		PID:          pid,
+		ParameterSet: psKind,
+		Nr:           nr,
+		Hex:          hexStr,
+		Length:       length,
 	}
+	if verbose {
+		psInfo.Details = details
+	}
+	jp.print(psInfo)
 }

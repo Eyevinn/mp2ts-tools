@@ -3,12 +3,17 @@ package app_test
 import (
 	"bytes"
 	"context"
+	"flag"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/Eyevinn/mp2ts-tools/cmd/ts-info/app"
 	"github.com/stretchr/testify/require"
+)
+
+var (
+	update = flag.Bool("update", false, "update the golden files of this test")
 )
 
 func TestParseFile(t *testing.T) {
@@ -20,6 +25,7 @@ func TestParseFile(t *testing.T) {
 	}{
 		{"avc_with_time", "../testdata/avc_with_time.ts", app.Options{ParameterSets: true}, "testdata/golden_avc_with_time.txt"},
 		{"bbb_1s", "testdata/bbb_1s.ts", app.Options{MaxNrPictures: 15}, "testdata/golden_bbb_1s.txt"},
+		{"bbb_1s_indented", "testdata/bbb_1s.ts", app.Options{MaxNrPictures: 2, Indent: true}, "testdata/golden_bbb_1s_indented.txt"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -29,8 +35,7 @@ func TestParseFile(t *testing.T) {
 			require.NoError(t, err)
 			err = app.Parse(ctx, &buf, f, c.options)
 			require.NoError(t, err)
-			expected_output := getExpectedOutput(t, c.expected_output_file)
-			require.Equal(t, expected_output, buf.String(), "should produce expected output")
+			compareUpdateGolden(t, buf.String(), c.expected_output_file, *update)
 		})
 	}
 }
@@ -41,4 +46,21 @@ func getExpectedOutput(t *testing.T, file string) string {
 	require.NoError(t, err)
 	expected_output_str := strings.ReplaceAll(string(expected_output), "\r\n", "\n")
 	return expected_output_str
+}
+
+func compareUpdateGolden(t *testing.T, actual string, goldenFile string, update bool) {
+	t.Helper()
+	if update {
+		err := os.WriteFile(goldenFile, []byte(actual), 0644)
+		require.NoError(t, err)
+	} else {
+		expected := getExpectedOutput(t, goldenFile)
+		require.Equal(t, expected, actual, "should produce expected output")
+	}
+}
+
+// TestMain is to set flags for tests. In particular, the update flag to update golden files.
+func TestMain(m *testing.M) {
+	flag.Parse()
+	os.Exit(m.Run())
 }

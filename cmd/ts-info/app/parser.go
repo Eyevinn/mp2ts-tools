@@ -3,24 +3,58 @@ package app
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 
-	"github.com/Eyevinn/mp4ff/avc"
-	"github.com/Eyevinn/mp4ff/sei"
 	"github.com/asticode/go-astits"
 )
 
 type Options struct {
+	MaxNrPictures int
 	ParameterSets bool
 	Version       bool
-	MaxNrPictures int
+	Indent        bool
 }
 
 const (
 	packetSize = 188
 )
+
+type elementaryStream struct {
+	PID   uint16 `json:"pid"`
+	Codec string `json:"codec"`
+	Type  string `json:"type"`
+}
+
+type jsonPrinter struct {
+	w        io.Writer
+	indent   bool
+	accError error
+}
+
+func (p *jsonPrinter) print(data any) {
+	var out []byte
+	var err error
+	if p.accError != nil {
+		return
+	}
+	if p.indent {
+		out, err = json.MarshalIndent(data, "", "  ")
+	} else {
+		out, err = json.Marshal(data)
+	}
+	if err != nil {
+		p.accError = err
+		return
+	}
+	_, p.accError = fmt.Fprintln(p.w, string(out))
+}
+
+func (p *jsonPrinter) error() error {
+	return p.accError
+}
 
 func Parse(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
 	rd := bufio.NewReaderSize(f, 1000*packetSize)
@@ -30,6 +64,7 @@ func Parse(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
 	sdtPrinted := false
 	esKinds := make(map[uint16]string)
 	avcPSs := make(map[uint16]*avcPS)
+	jp := &jsonPrinter{w: w, indent: o.Indent}
 dataLoop:
 	for {
 		d, err := dmx.NextData()
@@ -58,13 +93,17 @@ dataLoop:
 		if pmtPID < 0 && d.PMT != nil {
 			// Loop through elementary streams
 			for _, es := range d.PMT.ElementaryStreams {
+				var e *elementaryStream
 				switch es.StreamType {
 				case astits.StreamTypeH264Video:
-					fmt.Fprintf(w, "H264 video detected on PID: %d\n", es.ElementaryPID)
+					e = &elementaryStream{PID: es.ElementaryPID, Codec: "AVC", Type: "video"}
 					esKinds[es.ElementaryPID] = "AVC"
 				case astits.StreamTypeAACAudio:
-					fmt.Fprintf(w, "AAC audio detected on PID: %d\n", es.ElementaryPID)
+					e = &elementaryStream{PID: es.ElementaryPID, Codec: "AAC", Type: "audio"}
 					esKinds[es.ElementaryPID] = "AAC"
+				}
+				if e != nil {
+					jp.print(e)
 				}
 			}
 			pmtPID = int(d.PID)
@@ -79,7 +118,7 @@ dataLoop:
 		switch esKinds[d.PID] {
 		case "AVC":
 			avcPS := avcPSs[d.PID]
-			avcPS, err = parseAVCPES(w, d, avcPS, o.ParameterSets)
+			avcPS, err = parseAVCPES(jp, d, avcPS, o.ParameterSets)
 			if err != nil {
 				return err
 			}
@@ -95,86 +134,5 @@ dataLoop:
 			}
 		}
 	}
-	return nil
-}
-
-func parseAVCPES(w io.Writer, d *astits.DemuxerData, ps *avcPS, verbose bool) (*avcPS, error) {
-	pid := d.PID
-	pes := d.PES
-	fp := d.FirstPacket
-	if pes.Header.OptionalHeader.PTS == nil {
-		return nil, fmt.Errorf("no PTS in PES")
-	}
-	outText := fmt.Sprintf("PID: %d, ", pid)
-	if fp != nil {
-		af := fp.AdaptationField
-		if af != nil {
-			outText += fmt.Sprintf("RAI: %t, ", af.RandomAccessIndicator)
-		}
-	}
-	pts := *pes.Header.OptionalHeader.PTS
-	data := pes.Data
-	outText += fmt.Sprintf("PTS: %d, ", pts.Base)
-
-	dts := pes.Header.OptionalHeader.DTS
-	if dts != nil {
-		outText += fmt.Sprintf("DTS: %d, ", dts.Base)
-	}
-	nalus := avc.ExtractNalusFromByteStream(data)
-	firstPS := false
-	outText += "NALUs: "
-	for _, nalu := range nalus {
-		var seiMsg string
-		naluType := avc.GetNaluType(nalu[0])
-		switch naluType {
-		case avc.NALU_SPS:
-			if ps == nil && !firstPS {
-				ps = &avcPS{}
-				err := ps.setSPS(nalu)
-				if err != nil {
-					return nil, fmt.Errorf("cannot set SPS")
-				}
-				firstPS = true
-			}
-		case avc.NALU_PPS:
-			if firstPS {
-				err := ps.setPPS(nalu)
-				if err != nil {
-					return nil, fmt.Errorf("cannot set PPS")
-				}
-			}
-		case avc.NALU_SEI:
-			var sps *avc.SPS
-			if ps != nil {
-				sps = ps.getSPS()
-			}
-			msgs, err := avc.ParseSEINalu(nalu, sps)
-			if err != nil {
-				return nil, err
-			}
-			seiTexts := make([]string, 0, len(msgs))
-			for _, msg := range msgs {
-				if msg.Type() == sei.SEIPicTimingType {
-					pt := msg.(*sei.PicTimingAvcSEI)
-					seiTexts = append(seiTexts, fmt.Sprintf("Type 1: %s", pt.Clocks[0]))
-				}
-			}
-			seiMsg = strings.Join(seiTexts, ", ")
-			seiMsg += " "
-		}
-		outText += fmt.Sprintf("[%s %s%dB]", naluType, seiMsg, len(nalu))
-	}
-	if ps == nil {
-		return nil, nil
-	}
-	if firstPS {
-		for i := range ps.spss {
-			printPS(w, fmt.Sprintf("PID %d, SPS", pid), i, ps.spsnalu, ps.spss[i], verbose)
-		}
-		for i := range ps.ppss {
-			printPS(w, fmt.Sprintf("PID %d, PPS", pid), i, ps.ppsnalus[i], ps.ppss[i], verbose)
-		}
-	}
-	fmt.Fprintln(w, outText)
-	return ps, nil
+	return jp.error()
 }

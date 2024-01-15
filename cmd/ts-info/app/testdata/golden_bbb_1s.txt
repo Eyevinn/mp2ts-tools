@@ -1,20 +1,20 @@
-H264 video detected on PID: 256
-AAC audio detected on PID: 257
-PID 256, SPS 0 len 26B: 6764001facd9405005bb011000000300100000030300f1831960
-PID 256, PPS 0 len 5B: 68ebecb22c
-PID: 256, RAI: true, PTS: 133500, DTS: 126000, NALUs: [AUD_9 2B][SEI_6  701B][SPS_7 26B][PPS_8 5B][IDR_5 209B]
-PID: 256, RAI: false, PTS: 144750, DTS: 129750, NALUs: [AUD_9 2B][NonIDR_1 34B]
-PID: 256, RAI: false, PTS: 137250, DTS: 133500, NALUs: [AUD_9 2B][NonIDR_1 32B]
-PID: 256, RAI: false, PTS: 141000, DTS: 137250, NALUs: [AUD_9 2B][NonIDR_1 32B]
-PID: 256, RAI: false, PTS: 148500, DTS: 141000, NALUs: [AUD_9 2B][NonIDR_1 48B]
-PID: 256, RAI: false, PTS: 152250, DTS: 144750, NALUs: [AUD_9 2B][NonIDR_1 145B]
-PID: 256, RAI: false, PTS: 156000, DTS: 148500, NALUs: [AUD_9 2B][NonIDR_1 204B]
-PID: 256, RAI: false, PTS: 163500, DTS: 152250, NALUs: [AUD_9 2B][NonIDR_1 143B]
-PID: 256, RAI: false, PTS: 159750, DTS: 156000, NALUs: [AUD_9 2B][NonIDR_1 150B]
-PID: 256, PTS: 167250, DTS: 159750, NALUs: [AUD_9 2B][NonIDR_1 315B]
-PID: 256, RAI: false, PTS: 171000, DTS: 163500, NALUs: [AUD_9 2B][NonIDR_1 679B]
+{"pid":256,"codec":"AVC","type":"video"}
+{"pid":257,"codec":"AAC","type":"audio"}
+{"pid":256,"parameterSet":"SPS","nr":0,"hex":"6764001facd9405005bb011000000300100000030300f1831960","length":26}
+{"pid":256,"parameterSet":"PPS","nr":0,"hex":"68ebecb22c","length":5}
+{"pid":256,"rai":true,"pts":133500,"dts":126000,"nalus":[{"type":"AUD_9","len":2},{"type":"SEI_6","len":701},{"type":"SPS_7","len":26},{"type":"PPS_8","len":5},{"type":"IDR_5","len":209}]}
+{"pid":256,"rai":false,"pts":144750,"dts":129750,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":34}]}
+{"pid":256,"rai":false,"pts":137250,"dts":133500,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":32}]}
+{"pid":256,"rai":false,"pts":141000,"dts":137250,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":32}]}
+{"pid":256,"rai":false,"pts":148500,"dts":141000,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":48}]}
+{"pid":256,"rai":false,"pts":152250,"dts":144750,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":145}]}
+{"pid":256,"rai":false,"pts":156000,"dts":148500,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":204}]}
+{"pid":256,"rai":false,"pts":163500,"dts":152250,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":143}]}
+{"pid":256,"rai":false,"pts":159750,"dts":156000,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":150}]}
+{"pid":256,"rai":false,"pts":167250,"dts":159750,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":315}]}
+{"pid":256,"rai":false,"pts":171000,"dts":163500,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":679}]}
 SDT: service_id: 1, service_name: ts-info, provider_name: Eyevinn Technology
-PID: 256, PTS: 174750, DTS: 167250, NALUs: [AUD_9 2B][NonIDR_1 1718B]
-PID: 256, RAI: false, PTS: 182250, DTS: 171000, NALUs: [AUD_9 2B][NonIDR_1 918B]
-PID: 256, PTS: 178500, DTS: 174750, NALUs: [AUD_9 2B][NonIDR_1 506B]
-PID: 256, RAI: false, PTS: 189750, DTS: 178500, NALUs: [AUD_9 2B][NonIDR_1 1342B]
+{"pid":256,"rai":false,"pts":174750,"dts":167250,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":1718}]}
+{"pid":256,"rai":false,"pts":182250,"dts":171000,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":918}]}
+{"pid":256,"rai":false,"pts":178500,"dts":174750,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":506}]}
+{"pid":256,"rai":false,"pts":189750,"dts":178500,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":1342}]}

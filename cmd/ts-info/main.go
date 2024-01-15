@@ -17,15 +17,16 @@ import (
 
 func parseOptions() app.Options {
 	opts := app.Options{}
-	flag.BoolVar(&opts.ParameterSets, "ps", false, "print parameter sets")
 	flag.IntVar(&opts.MaxNrPictures, "max", 0, "max nr pictures to parse")
+	flag.BoolVar(&opts.ParameterSets, "ps", false, "print parameter sets")
+	flag.BoolVar(&opts.Indent, "indent", false, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
 
 	flag.Usage = func() {
 		parts := strings.Split(os.Args[0], "/")
 		name := parts[len(parts)-1]
 		fmt.Fprintf(os.Stderr, usg, name, name)
-		fmt.Fprintf(os.Stderr, "\nRun as: %s [options] file.ts with options:\n\n", name)
+		fmt.Fprintf(os.Stderr, "\nRun as: %s [options] file.ts (- for stdin) with options:\n\n", name)
 		flag.PrintDefaults()
 	}
 

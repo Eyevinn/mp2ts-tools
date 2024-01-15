@@ -14,7 +14,7 @@ data from MPEG-2 TS streams.
 ## ts-info
 
 `ts-info` is a tool that parses a TS file, or a stream on stdin, and prints
-information about the video streams.
+information about the video streams in JSON format.
 For AVC (H.264), it shows information about
 PTS/DTS, PicTiming SEI, SPS and PPS, and NAL units.
 
