@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/Eyevinn/mp4ff/avc"
 	"github.com/Eyevinn/mp4ff/hevc"
 	"github.com/Eyevinn/mp4ff/sei"
 	"github.com/asticode/go-astits"
@@ -12,6 +13,7 @@ import (
 type hevcPS struct {
 	spss     map[uint32]*hevc.SPS
 	ppss     map[uint32]*hevc.PPS
+	vpsnalu  []byte
 	spsnalu  []byte
 	ppsnalus [][]byte
 }
@@ -51,77 +53,97 @@ func (a *hevcPS) setPPS(nalu []byte) error {
 func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, verbose bool) (*hevcPS, error) {
 	pid := d.PID
 	pes := d.PES
-	fp := d.FirstPacket
 	if pes.Header.OptionalHeader.PTS == nil {
 		return nil, fmt.Errorf("no PTS in PES")
 	}
+
 	nfd := naluFrameData{
 		PID: pid,
 	}
-	if fp != nil {
-		af := fp.AdaptationField
+	if d.FirstPacket != nil {
+		af := d.FirstPacket.AdaptationField
 		if af != nil {
 			nfd.RAI = af.RandomAccessIndicator
 		}
 	}
-	pts := *pes.Header.OptionalHeader.PTS
-	nfd.PTS = pts.Base
+	nfd.PTS = *&pes.Header.OptionalHeader.PTS.Base
 	dts := pes.Header.OptionalHeader.DTS
 	if dts != nil {
 		nfd.DTS = &dts.Base
 	}
 	data := pes.Data
+	ps = &hevcPS{}
 	firstPS := false
 
-	for _, spsNalu := range hevc.ExtractNalusOfTypeFromByteStream(hevc.NALU_SPS, data, true) {
-		if ps == nil && !firstPS {
-			ps = &hevcPS{}
-			err := ps.setSPS(spsNalu)
-			if err != nil {
-				return nil, fmt.Errorf("cannot set SPS")
+	for _, nalu := range avc.ExtractNalusFromByteStream(data) {
+		naluType := hevc.GetNaluType(nalu[0])
+		switch naluType {
+		case hevc.NALU_SPS:
+			if !firstPS {
+				err := ps.setSPS(nalu)
+				if err != nil {
+					return nil, fmt.Errorf("cannot set SPS")
+				}
+				firstPS = true
+				nfd.NALUS = append(nfd.NALUS, naluData{
+					Type: naluType.String(),
+					Len:  len(nalu),
+					Data: "",
+				})
 			}
-			firstPS = true
-		}
-	}
-
-	for _, ppsNalu := range hevc.ExtractNalusOfTypeFromByteStream(hevc.NALU_PPS, data, true) {
-		if firstPS {
-			err := ps.setPPS(ppsNalu)
-			if err != nil {
-				return nil, fmt.Errorf("cannot set PPS")
+		case hevc.NALU_PPS:
+			if firstPS {
+				err := ps.setPPS(nalu)
+				if err != nil {
+					return nil, fmt.Errorf("cannot set PPS")
+				}
+				nfd.NALUS = append(nfd.NALUS, naluData{
+					Type: naluType.String(),
+					Len:  len(nalu),
+					Data: "",
+				})
 			}
-		}
-	}
-
-	var hdrLen = 2
-	for _, seiNalu := range hevc.ExtractNalusOfTypeFromByteStream(hevc.NALU_SEI_PREFIX, data, true) {
-		seiBytes := seiNalu[hdrLen:]
-		buf := bytes.NewReader(seiBytes)
-		seiDatas, err := sei.ExtractSEIData(buf)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, seiData := range seiDatas {
-			var seiMsg sei.SEIMessage
-			seiMsg, err = sei.DecodeSEIMessage(&seiData, sei.HEVC)
-			if err != nil {
-				fmt.Printf("SEI: Got error %q\n", err)
-				continue
-			}
-
+		case hevc.NALU_VPS:
+			ps.vpsnalu = nalu
 			nfd.NALUS = append(nfd.NALUS, naluData{
-				Type: hevc.NALU_SEI_PREFIX.String(),
-				Len:  len(seiNalu),
-				Data: seiMsg.String(),
+				Type: naluType.String(),
+				Len:  len(nalu),
+				Data: "",
+			})
+		case hevc.NALU_SEI_PREFIX, hevc.NALU_SEI_SUFFIX:
+			var hdrLen = 2
+			seiBytes := nalu[hdrLen:]
+			buf := bytes.NewReader(seiBytes)
+			seiDatas, err := sei.ExtractSEIData(buf)
+			if err != nil {
+				return nil, err
+			}
+
+			for _, seiData := range seiDatas {
+				var seiMsg sei.SEIMessage
+				seiMsg, err = sei.DecodeSEIMessage(&seiData, sei.HEVC)
+				if err != nil {
+					fmt.Printf("SEI: Got error %q\n", err)
+					continue
+				}
+
+				nfd.NALUS = append(nfd.NALUS, naluData{
+					Type: naluType.String(),
+					Len:  len(nalu),
+					Data: seiMsg.String(),
+				})
+			}
+		default:
+			nfd.NALUS = append(nfd.NALUS, naluData{
+				Type: naluType.String(),
+				Len:  len(nalu),
+				Data: "",
 			})
 		}
 	}
 
-	if ps == nil {
-		return nil, nil
-	}
 	if firstPS {
+		printPS(jp, pid, "VPS", 0, ps.vpsnalu, ps.vpsnalu, verbose)
 		for nr := range ps.spss {
 			printPS(jp, pid, "SPS", nr, ps.spsnalu, ps.spss[nr], verbose)
 		}
