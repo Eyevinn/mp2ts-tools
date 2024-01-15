@@ -10,15 +10,15 @@ import (
 	"github.com/asticode/go-astits"
 )
 
-type avcFrameData struct {
-	PID   uint16    `json:"pid"`
-	RAI   bool      `json:"rai"`
-	PTS   int64     `json:"pts"`
-	DTS   *int64    `json:"dts,omitempty"`
-	NALUS []avcNALU `json:"nalus"`
+type naluFrameData struct {
+	PID   uint16     `json:"pid"`
+	RAI   bool       `json:"rai"`
+	PTS   int64      `json:"pts"`
+	DTS   *int64     `json:"dts,omitempty"`
+	NALUS []naluData `json:"nalus"`
 }
 
-type avcNALU struct {
+type naluData struct {
 	Type string `json:"type"`
 	Len  int    `json:"len"`
 	Data string `json:"data,omitempty"`
@@ -31,27 +31,26 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, verbose bool
 	if pes.Header.OptionalHeader.PTS == nil {
 		return nil, fmt.Errorf("no PTS in PES")
 	}
-	ad := avcFrameData{
+	nfd := naluFrameData{
 		PID: pid,
 	}
 	if fp != nil {
 		af := fp.AdaptationField
 		if af != nil {
-			ad.RAI = af.RandomAccessIndicator
+			nfd.RAI = af.RandomAccessIndicator
 		}
 	}
 	pts := *pes.Header.OptionalHeader.PTS
-	data := pes.Data
-	ad.PTS = pts.Base
-
+	nfd.PTS = pts.Base
 	dts := pes.Header.OptionalHeader.DTS
 	if dts != nil {
-		ad.DTS = &dts.Base
+		nfd.DTS = &dts.Base
 	}
+	data := pes.Data
 	nalus := avc.ExtractNalusFromByteStream(data)
 	firstPS := false
 	for _, nalu := range nalus {
-		var seiMsg string
+		seiMsg := ""
 		naluType := avc.GetNaluType(nalu[0])
 		switch naluType {
 		case avc.NALU_SPS:
@@ -88,7 +87,7 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, verbose bool
 			}
 			seiMsg = strings.Join(seiTexts, ", ")
 		}
-		ad.NALUS = append(ad.NALUS, avcNALU{
+		nfd.NALUS = append(nfd.NALUS, naluData{
 			Type: naluType.String(),
 			Len:  len(nalu),
 			Data: seiMsg,
@@ -105,7 +104,7 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, verbose bool
 			printPS(jp, pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], verbose)
 		}
 	}
-	jp.print(ad)
+	jp.print(nfd)
 	return ps, jp.error()
 }
 
