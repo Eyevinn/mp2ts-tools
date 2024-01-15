@@ -76,7 +76,6 @@ func Parse(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
 	nrPics := 0
 	sdtPrinted := false
 	esKinds := make(map[uint16]string)
-	avcPSs := make(map[uint16]*avcPS)
 	jp := &jsonPrinter{w: w, indent: o.Indent}
 dataLoop:
 	for {
@@ -104,6 +103,9 @@ dataLoop:
 				case astits.StreamTypeAACAudio:
 					e = &elementaryStream{PID: es.ElementaryPID, Codec: "AAC", Type: "audio"}
 					esKinds[es.ElementaryPID] = "AAC"
+				case astits.StreamTypeH265Video:
+					e = &elementaryStream{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
+					esKinds[es.ElementaryPID] = "HEVC"
 				}
 				if e != nil {
 					jp.print(e)
@@ -120,6 +122,7 @@ dataLoop:
 		}
 		switch esKinds[d.PID] {
 		case "AVC":
+			avcPSs := make(map[uint16]*avcPS)
 			avcPS := avcPSs[d.PID]
 			avcPS, err = parseAVCPES(jp, d, avcPS, o.ParameterSets)
 			if err != nil {
@@ -130,6 +133,23 @@ dataLoop:
 			}
 			if avcPSs[d.PID] == nil {
 				avcPSs[d.PID] = avcPS
+			}
+			nrPics++
+			if o.MaxNrPictures > 0 && nrPics == o.MaxNrPictures {
+				break dataLoop
+			}
+		case "HEVC":
+			hevcPSs := make(map[uint16]*hevcPS)
+			hevcPS := hevcPSs[d.PID]
+			hevcPS, err = parseHEVCPES(jp, d, hevcPS, o.ParameterSets)
+			if err != nil {
+				return err
+			}
+			if hevcPS == nil {
+				continue
+			}
+			if hevcPSs[d.PID] == nil {
+				hevcPSs[d.PID] = hevcPS
 			}
 			nrPics++
 			if o.MaxNrPictures > 0 && nrPics == o.MaxNrPictures {
