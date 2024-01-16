@@ -18,10 +18,6 @@ type hevcPS struct {
 	ppsnalus [][]byte
 }
 
-func (a *hevcPS) getSPS() *hevc.SPS {
-	return a.spss[0]
-}
-
 func (a *hevcPS) setSPS(nalu []byte) error {
 	if a.spss == nil {
 		a.spss = make(map[uint32]*hevc.SPS, 1)
@@ -66,13 +62,15 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, verbose bo
 			nfd.RAI = af.RandomAccessIndicator
 		}
 	}
-	nfd.PTS = *&pes.Header.OptionalHeader.PTS.Base
+	nfd.PTS = pes.Header.OptionalHeader.PTS.Base
 	dts := pes.Header.OptionalHeader.DTS
 	if dts != nil {
 		nfd.DTS = &dts.Base
 	}
 	data := pes.Data
-	ps = &hevcPS{}
+	if ps == nil {
+		ps = &hevcPS{}
+	}
 	firstPS := false
 
 	for _, nalu := range avc.ExtractNalusFromByteStream(data) {
