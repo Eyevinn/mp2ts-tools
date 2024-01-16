@@ -141,7 +141,7 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, verbose bo
 	}
 
 	if firstPS {
-		printPS(jp, pid, "VPS", 0, ps.vpsnalu, ps.vpsnalu, verbose)
+		printPS(jp, pid, "VPS", 0, ps.vpsnalu, nil, verbose)
 		for nr := range ps.spss {
 			printPS(jp, pid, "SPS", nr, ps.spsnalu, ps.spss[nr], verbose)
 		}
