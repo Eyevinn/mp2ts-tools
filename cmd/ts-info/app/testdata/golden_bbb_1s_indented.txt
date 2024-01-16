@@ -51,53 +51,18 @@
   ]
 }
 {
-  "SDT": [
-    {
-      "serviceId": 1,
-      "descriptors": [
-        {
-          "serviceName": "ts-info",
-          "providerName": "Eyevinn Technology"
-        }
-      ]
-    }
-  ]
-}
-{
   "pid": 256,
-  "parameterSet": "SPS",
-  "nr": 0,
-  "hex": "6764001facd9405005bb011000000300100000030300f1831960",
-  "length": 26
-}
-{
-  "pid": 256,
-  "parameterSet": "PPS",
-  "nr": 0,
-  "hex": "68ebecb22c",
-  "length": 5
-}
-{
-  "pid": 256,
-  "rai": true,
-  "pts": 223500,
-  "dts": 216000,
+  "rai": false,
+  "pts": 144750,
+  "dts": 129750,
   "nalus": [
     {
       "type": "AUD_9",
       "len": 2
     },
     {
-      "type": "SPS_7",
-      "len": 26
-    },
-    {
-      "type": "PPS_8",
-      "len": 5
-    },
-    {
-      "type": "IDR_5",
-      "len": 12975
+      "type": "NonIDR_1",
+      "len": 34
     }
   ]
 }

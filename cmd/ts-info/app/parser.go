@@ -76,6 +76,8 @@ func Parse(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
 	nrPics := 0
 	sdtPrinted := false
 	esKinds := make(map[uint16]string)
+	avcPSs := make(map[uint16]*avcPS)
+	hevcPSs := make(map[uint16]*hevcPS)
 	jp := &jsonPrinter{w: w, indent: o.Indent}
 dataLoop:
 	for {
@@ -122,7 +124,6 @@ dataLoop:
 		}
 		switch esKinds[d.PID] {
 		case "AVC":
-			avcPSs := make(map[uint16]*avcPS)
 			avcPS := avcPSs[d.PID]
 			avcPS, err = parseAVCPES(jp, d, avcPS, o.ParameterSets)
 			if err != nil {
@@ -139,7 +140,6 @@ dataLoop:
 				break dataLoop
 			}
 		case "HEVC":
-			hevcPSs := make(map[uint16]*hevcPS)
 			hevcPS := hevcPSs[d.PID]
 			hevcPS, err = parseHEVCPES(jp, d, hevcPS, o.ParameterSets)
 			if err != nil {
