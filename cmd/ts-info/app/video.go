@@ -18,6 +18,9 @@ type streamStatistics struct {
 	// skip DTSSteps and PTSSteps in json output
 	DTSSteps []int64 `json:"-"`
 	PTSSteps []int64 `json:"-"`
+	MaxStep  int64   `json:"maxStep,omitempty"`
+	MinStep  int64   `json:"minStep,omitempty"`
+	AvgStep  int64   `json:"avgStep,omitempty"`
 }
 
 type naluFrameData struct {
@@ -32,6 +35,23 @@ type naluData struct {
 	Type string `json:"type"`
 	Len  int    `json:"len"`
 	Data string `json:"data,omitempty"`
+}
+
+func sliceMinMaxAverage(values []int64) (int64, int64, int64) {
+	min := values[0] //assign the first element equal to min
+	max := values[0] //assign the first element equal to max
+	sum := int64(0)
+	for _, number := range values {
+		if number < min {
+			min = number
+		}
+		if number > max {
+			max = number
+		}
+		sum += number
+	}
+	avg := sum / int64(len(values))
+	return min, max, avg
 }
 
 // Calculate frame rate from DTS or PTS steps
@@ -54,16 +74,15 @@ func (s *streamStatistics) update() {
 	for i := 0; i < len(dataRange)-1; i++ {
 		steps[i] = dataRange[i+1] - dataRange[i]
 	}
-	// Calculate average
-	var sum int64
-	for _, step := range steps {
-		sum += step
+	minStep, maxStep, avgStep := sliceMinMaxAverage(steps)
+	if maxStep != minStep {
+		s.MinStep, s.MaxStep, s.AvgStep = minStep, maxStep, avgStep
 	}
-	avg := float64(sum) / float64(len(steps))
+
 	// fmt.Printf("dataRange: %v\n", dataRange)
 	// fmt.Printf("Steps: %v\n", steps)
-	// fmt.Printf("Average step: %f\n", avg)
-	s.FrameRate = 90000 / avg
+	// fmt.Printf("Average step: %f\n", avgStep)
+	s.FrameRate = float64(90000) / float64(avgStep)
 }
 
 func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (*avcPS, error) {

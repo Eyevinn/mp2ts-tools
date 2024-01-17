@@ -68,6 +68,7 @@ func (p *jsonPrinter) print(data any) {
 }
 
 func (p *jsonPrinter) printStatistics(s streamStatistics) {
+	// fmt.Fprintf(p.w, "Print statistics for PID: %d\n", s.Pid)
 	// calculate frame rates
 	s.update()
 
@@ -102,7 +103,7 @@ dataLoop:
 		d, err := dmx.NextData()
 		if err != nil {
 			if err.Error() == "astits: no more packets" {
-				break
+				break dataLoop
 			}
 			return fmt.Errorf("reading next data %w", err)
 		}
@@ -154,8 +155,8 @@ dataLoop:
 				avcPSs[d.PID] = avcPS
 			}
 			nrPics++
+			statistics[d.PID] = &avcPS.statistics
 			if o.MaxNrPictures > 0 && nrPics == o.MaxNrPictures {
-				statistics[d.PID] = &avcPS.statistics
 				break dataLoop
 			}
 		case "HEVC":
@@ -171,8 +172,8 @@ dataLoop:
 				hevcPSs[d.PID] = hevcPS
 			}
 			nrPics++
+			statistics[d.PID] = &hevcPS.statistics
 			if o.MaxNrPictures > 0 && nrPics == o.MaxNrPictures {
-				statistics[d.PID] = &hevcPS.statistics
 				break dataLoop
 			}
 		}
