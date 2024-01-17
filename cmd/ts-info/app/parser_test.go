@@ -24,10 +24,14 @@ func TestParseFile(t *testing.T) {
 		expected_output_file string
 	}{
 		{"avc_with_time", "../testdata/avc_with_time.ts", app.Options{ParameterSets: true}, "testdata/golden_avc_with_time.txt"},
-		{"bbb_1s", "testdata/bbb_1s.ts", app.Options{MaxNrPictures: 15}, "testdata/golden_bbb_1s.txt"},
-		{"bbb_1s_indented", "testdata/bbb_1s.ts", app.Options{MaxNrPictures: 2, Indent: true}, "testdata/golden_bbb_1s_indented.txt"},
-		{"obs_h265_aac", "testdata/obs_h265_aac.ts", app.Options{MaxNrPictures: 15}, "testdata/golden_obs_h265_aac.txt"},
-		{"obs_h265_aac_indented", "testdata/obs_h265_aac.ts", app.Options{MaxNrPictures: 2, Indent: true}, "testdata/golden_obs_h265_aac_indented.txt"},
+		{"bbb_1s_no_nalu_no_sei", "testdata/bbb_1s.ts", app.Options{MaxNrPictures: 15}, "testdata/golden_bbb_1s_no_nalu(no_sei).txt"},
+		{"bbb_1s_no_nalu", "testdata/bbb_1s.ts", app.Options{MaxNrPictures: 15, ShowSEI: true}, "testdata/golden_bbb_1s_no_nalu(no_sei).txt"},
+		{"bbb_1s", "testdata/bbb_1s.ts", app.Options{MaxNrPictures: 15, ShowNALU: true, ShowSEI: true}, "testdata/golden_bbb_1s.txt"},
+		{"bbb_1s_indented", "testdata/bbb_1s.ts", app.Options{MaxNrPictures: 2, ShowNALU: true, ShowSEI: true, Indent: true}, "testdata/golden_bbb_1s_indented.txt"},
+		{"obs_h265_aac_no_nalu_no_sei", "testdata/obs_h265_aac.ts", app.Options{MaxNrPictures: 15}, "testdata/golden_obs_h265_aac_no_nalu(no_sei).txt"},
+		{"obs_h265_aac_no_nalu", "testdata/obs_h265_aac.ts", app.Options{MaxNrPictures: 15, ShowSEI: true}, "testdata/golden_obs_h265_aac_no_nalu(no_sei).txt"},
+		{"obs_h265_aac", "testdata/obs_h265_aac.ts", app.Options{MaxNrPictures: 15, ShowNALU: true, ShowSEI: true}, "testdata/golden_obs_h265_aac.txt"},
+		{"obs_h265_aac_indented", "testdata/obs_h265_aac.ts", app.Options{MaxNrPictures: 2, ShowNALU: true, ShowSEI: true, Indent: true}, "testdata/golden_obs_h265_aac_indented.txt"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

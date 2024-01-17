@@ -15,7 +15,7 @@ type naluFrameData struct {
 	RAI   bool       `json:"rai"`
 	PTS   int64      `json:"pts"`
 	DTS   *int64     `json:"dts,omitempty"`
-	NALUS []naluData `json:"nalus"`
+	NALUS []naluData `json:"nalus,omitempty"`
 }
 
 type naluData struct {
@@ -24,7 +24,7 @@ type naluData struct {
 	Data string `json:"data,omitempty"`
 }
 
-func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, verbose bool) (*avcPS, error) {
+func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (*avcPS, error) {
 	pid := d.PID
 	pes := d.PES
 	fp := d.FirstPacket
@@ -49,6 +49,15 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, verbose bool
 	data := pes.Data
 	nalus := avc.ExtractNalusFromByteStream(data)
 	firstPS := false
+
+	if !o.ShowNALU {
+		// return empty PS to count picture numbers correctly
+		// even if we are not printing NALUs
+		ps = &avcPS{}
+		jp.print(nfd)
+		return ps, jp.error()
+	}
+
 	for _, nalu := range nalus {
 		seiMsg := ""
 		naluType := avc.GetNaluType(nalu[0])
@@ -70,6 +79,9 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, verbose bool
 				}
 			}
 		case avc.NALU_SEI:
+			if !o.ShowSEI {
+				continue
+			}
 			var sps *avc.SPS
 			if ps != nil {
 				sps = ps.getSPS()
@@ -98,10 +110,10 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, verbose bool
 	}
 	if firstPS {
 		for nr := range ps.spss {
-			printPS(jp, pid, "SPS", nr, ps.spsnalu, ps.spss[nr], verbose)
+			printPS(jp, pid, "SPS", nr, ps.spsnalu, ps.spss[nr], o.ParameterSets)
 		}
 		for nr := range ps.ppss {
-			printPS(jp, pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], verbose)
+			printPS(jp, pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], o.ParameterSets)
 		}
 	}
 	jp.print(nfd)

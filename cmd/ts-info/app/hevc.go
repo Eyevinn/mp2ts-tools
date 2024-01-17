@@ -46,7 +46,7 @@ func (a *hevcPS) setPPS(nalu []byte) error {
 	return nil
 }
 
-func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, verbose bool) (*hevcPS, error) {
+func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options) (*hevcPS, error) {
 	pid := d.PID
 	pes := d.PES
 	if pes.Header.OptionalHeader.PTS == nil {
@@ -72,6 +72,13 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, verbose bo
 		ps = &hevcPS{}
 	}
 	firstPS := false
+
+	if !o.ShowNALU {
+		// return empty PS to count picture numbers correctly
+		// even if we are not printing NALUs
+		jp.print(nfd)
+		return ps, jp.error()
+	}
 
 	for _, nalu := range avc.ExtractNalusFromByteStream(data) {
 		naluType := hevc.GetNaluType(nalu[0])
@@ -109,6 +116,9 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, verbose bo
 				Data: "",
 			})
 		case hevc.NALU_SEI_PREFIX, hevc.NALU_SEI_SUFFIX:
+			if !o.ShowSEI {
+				continue
+			}
 			var hdrLen = 2
 			seiBytes := nalu[hdrLen:]
 			buf := bytes.NewReader(seiBytes)
@@ -141,12 +151,12 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, verbose bo
 	}
 
 	if firstPS {
-		printPS(jp, pid, "VPS", 0, ps.vpsnalu, nil, verbose)
+		printPS(jp, pid, "VPS", 0, ps.vpsnalu, nil, o.ParameterSets)
 		for nr := range ps.spss {
-			printPS(jp, pid, "SPS", nr, ps.spsnalu, ps.spss[nr], verbose)
+			printPS(jp, pid, "SPS", nr, ps.spsnalu, ps.spss[nr], o.ParameterSets)
 		}
 		for nr := range ps.ppss {
-			printPS(jp, pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], verbose)
+			printPS(jp, pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], o.ParameterSets)
 		}
 	}
 	jp.print(nfd)

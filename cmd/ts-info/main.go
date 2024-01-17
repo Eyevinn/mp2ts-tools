@@ -21,6 +21,8 @@ func parseOptions() app.Options {
 	flag.BoolVar(&opts.ParameterSets, "ps", false, "print parameter sets")
 	flag.BoolVar(&opts.Indent, "indent", false, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
+	flag.BoolVar(&opts.ShowNALU, "nalu", false, "print NAL Units")
+	flag.BoolVar(&opts.ShowSEI, "sei", false, "print sei messages")
 
 	flag.Usage = func() {
 		parts := strings.Split(os.Args[0], "/")

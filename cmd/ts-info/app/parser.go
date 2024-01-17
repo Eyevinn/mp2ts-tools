@@ -15,6 +15,8 @@ type Options struct {
 	ParameterSets bool
 	Version       bool
 	Indent        bool
+	ShowNALU      bool
+	ShowSEI       bool
 }
 
 const (
@@ -125,7 +127,7 @@ dataLoop:
 		switch esKinds[d.PID] {
 		case "AVC":
 			avcPS := avcPSs[d.PID]
-			avcPS, err = parseAVCPES(jp, d, avcPS, o.ParameterSets)
+			avcPS, err = parseAVCPES(jp, d, avcPS, o)
 			if err != nil {
 				return err
 			}
@@ -141,7 +143,7 @@ dataLoop:
 			}
 		case "HEVC":
 			hevcPS := hevcPSs[d.PID]
-			hevcPS, err = parseHEVCPES(jp, d, hevcPS, o.ParameterSets)
+			hevcPS, err = parseHEVCPES(jp, d, hevcPS, o)
 			if err != nil {
 				return err
 			}

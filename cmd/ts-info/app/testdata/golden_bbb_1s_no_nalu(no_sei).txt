@@ -1,0 +1,18 @@
+{"pid":256,"codec":"AVC","type":"video"}
+{"pid":257,"codec":"AAC","type":"audio"}
+{"pid":256,"rai":true,"pts":133500,"dts":126000}
+{"pid":256,"rai":false,"pts":144750,"dts":129750}
+{"pid":256,"rai":false,"pts":137250,"dts":133500}
+{"pid":256,"rai":false,"pts":141000,"dts":137250}
+{"pid":256,"rai":false,"pts":148500,"dts":141000}
+{"pid":256,"rai":false,"pts":152250,"dts":144750}
+{"pid":256,"rai":false,"pts":156000,"dts":148500}
+{"pid":256,"rai":false,"pts":163500,"dts":152250}
+{"pid":256,"rai":false,"pts":159750,"dts":156000}
+{"pid":256,"rai":false,"pts":167250,"dts":159750}
+{"pid":256,"rai":false,"pts":171000,"dts":163500}
+{"SDT":[{"serviceId":1,"descriptors":[{"serviceName":"ts-info","providerName":"Eyevinn Technology"}]}]}
+{"pid":256,"rai":false,"pts":174750,"dts":167250}
+{"pid":256,"rai":false,"pts":182250,"dts":171000}
+{"pid":256,"rai":false,"pts":178500,"dts":174750}
+{"pid":256,"rai":false,"pts":189750,"dts":178500}
