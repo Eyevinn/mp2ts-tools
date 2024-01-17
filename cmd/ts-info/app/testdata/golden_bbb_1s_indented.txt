@@ -66,3 +66,8 @@
     }
   ]
 }
+{
+  "streamType": "AVC",
+  "pid": 256,
+  "frameRate": 24
+}

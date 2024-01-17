@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Calculate frame-rate based on DTS/PTS and print out in JSON format
 - Enable NALU/SEI printing by option
 - Print SDT in JSON format
 

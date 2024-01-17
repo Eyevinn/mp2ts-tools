@@ -67,6 +67,16 @@ func (p *jsonPrinter) print(data any) {
 	_, p.accError = fmt.Fprintln(p.w, string(out))
 }
 
+func (p *jsonPrinter) printStatistics(s streamStatistics) {
+	// calculate frame rates
+	s.update()
+
+	// TODO: format statistics
+
+	// print statistics
+	p.print(s)
+}
+
 func (p *jsonPrinter) error() error {
 	return p.accError
 }
@@ -81,8 +91,14 @@ func Parse(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
 	avcPSs := make(map[uint16]*avcPS)
 	hevcPSs := make(map[uint16]*hevcPS)
 	jp := &jsonPrinter{w: w, indent: o.Indent}
+	statistics := make(map[uint16]*streamStatistics)
 dataLoop:
 	for {
+		// Check if context was cancelled
+		if ctx.Err() != nil {
+			break dataLoop
+		}
+
 		d, err := dmx.NextData()
 		if err != nil {
 			if err.Error() == "astits: no more packets" {
@@ -139,6 +155,7 @@ dataLoop:
 			}
 			nrPics++
 			if o.MaxNrPictures > 0 && nrPics == o.MaxNrPictures {
+				statistics[d.PID] = &avcPS.statistics
 				break dataLoop
 			}
 		case "HEVC":
@@ -155,9 +172,14 @@ dataLoop:
 			}
 			nrPics++
 			if o.MaxNrPictures > 0 && nrPics == o.MaxNrPictures {
+				statistics[d.PID] = &hevcPS.statistics
 				break dataLoop
 			}
 		}
+	}
+
+	for _, s := range statistics {
+		jp.printStatistics(*s)
 	}
 	return jp.error()
 }

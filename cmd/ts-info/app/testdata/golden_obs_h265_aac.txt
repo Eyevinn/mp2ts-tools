@@ -18,3 +18,4 @@
 {"pid":256,"rai":false,"pts":37920,"nalus":[{"type":"AUD_35","len":3},{"type":"NonRAP_Trail_1","len":796}]}
 {"pid":256,"rai":false,"pts":40920,"nalus":[{"type":"AUD_35","len":3},{"type":"NonRAP_Trail_1","len":1662}]}
 {"pid":256,"rai":false,"pts":43920,"nalus":[{"type":"AUD_35","len":3},{"type":"NonRAP_Trail_1","len":349}]}
+{"streamType":"HEVC","pid":256,"frameRate":30}

@@ -11,11 +11,12 @@ import (
 )
 
 type hevcPS struct {
-	spss     map[uint32]*hevc.SPS
-	ppss     map[uint32]*hevc.PPS
-	vpsnalu  []byte
-	spsnalu  []byte
-	ppsnalus [][]byte
+	spss       map[uint32]*hevc.SPS
+	ppss       map[uint32]*hevc.PPS
+	vpsnalu    []byte
+	spsnalu    []byte
+	ppsnalus   [][]byte
+	statistics streamStatistics
 }
 
 func (a *hevcPS) setSPS(nalu []byte) error {
@@ -62,24 +63,29 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 			nfd.RAI = af.RandomAccessIndicator
 		}
 	}
-	nfd.PTS = pes.Header.OptionalHeader.PTS.Base
-	dts := pes.Header.OptionalHeader.DTS
-	if dts != nil {
-		nfd.DTS = &dts.Base
-	}
-	data := pes.Data
 	if ps == nil {
-		ps = &hevcPS{}
-	}
-	firstPS := false
-
-	if !o.ShowNALU {
 		// return empty PS to count picture numbers correctly
 		// even if we are not printing NALUs
+		ps = &hevcPS{}
+	}
+
+	pts := *pes.Header.OptionalHeader.PTS
+	nfd.PTS = pts.Base
+	ps.statistics.Type = "HEVC"
+	ps.statistics.Pid = pid
+	ps.statistics.PTSSteps = append(ps.statistics.PTSSteps, pts.Base)
+	dts := pes.Header.OptionalHeader.DTS
+	if dts != nil {
+		nfd.DTS = dts.Base
+		ps.statistics.DTSSteps = append(ps.statistics.DTSSteps, dts.Base)
+	}
+	if !o.ShowNALU {
 		jp.print(nfd)
 		return ps, jp.error()
 	}
 
+	data := pes.Data
+	firstPS := false
 	for _, nalu := range avc.ExtractNalusFromByteStream(data) {
 		naluType := hevc.GetNaluType(nalu[0])
 		switch naluType {

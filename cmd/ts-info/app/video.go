@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Eyevinn/mp4ff/avc"
@@ -10,11 +11,20 @@ import (
 	"github.com/asticode/go-astits"
 )
 
+type streamStatistics struct {
+	Type      string  `json:"streamType"`
+	Pid       uint16  `json:"pid"`
+	FrameRate float64 `json:"frameRate"`
+	// skip DTSSteps and PTSSteps in json output
+	DTSSteps []int64 `json:"-"`
+	PTSSteps []int64 `json:"-"`
+}
+
 type naluFrameData struct {
 	PID   uint16     `json:"pid"`
 	RAI   bool       `json:"rai"`
 	PTS   int64      `json:"pts"`
-	DTS   *int64     `json:"dts,omitempty"`
+	DTS   int64      `json:"dts,omitempty"`
 	NALUS []naluData `json:"nalus,omitempty"`
 }
 
@@ -22,6 +32,38 @@ type naluData struct {
 	Type string `json:"type"`
 	Len  int    `json:"len"`
 	Data string `json:"data,omitempty"`
+}
+
+// Calculate frame rate from DTS or PTS steps
+func (s *streamStatistics) update() {
+	if len(s.PTSSteps) < 2 && len(s.DTSSteps) < 2 {
+		return
+	}
+	// Use DTS steps if possible, and PTS steps otherwise
+	dataRange := s.PTSSteps
+	if len(s.DTSSteps) >= 2 {
+		dataRange = s.DTSSteps
+	}
+	// Sort steps in increasing order
+	sort.Slice(dataRange, func(i, j int) bool { return dataRange[i] < dataRange[j] })
+
+	// TODO: Handle wrap-around by removing outliers
+
+	// Calculate steps
+	steps := make([]int64, len(dataRange)-1)
+	for i := 0; i < len(dataRange)-1; i++ {
+		steps[i] = dataRange[i+1] - dataRange[i]
+	}
+	// Calculate average
+	var sum int64
+	for _, step := range steps {
+		sum += step
+	}
+	avg := float64(sum) / float64(len(steps))
+	// fmt.Printf("dataRange: %v\n", dataRange)
+	// fmt.Printf("Steps: %v\n", steps)
+	// fmt.Printf("Average step: %f\n", avg)
+	s.FrameRate = 90000 / avg
 }
 
 func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (*avcPS, error) {
@@ -40,31 +82,36 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (
 			nfd.RAI = af.RandomAccessIndicator
 		}
 	}
-	pts := *pes.Header.OptionalHeader.PTS
-	nfd.PTS = pts.Base
-	dts := pes.Header.OptionalHeader.DTS
-	if dts != nil {
-		nfd.DTS = &dts.Base
-	}
-	data := pes.Data
-	nalus := avc.ExtractNalusFromByteStream(data)
-	firstPS := false
-
-	if !o.ShowNALU {
+	if ps == nil {
 		// return empty PS to count picture numbers correctly
 		// even if we are not printing NALUs
 		ps = &avcPS{}
+	}
+
+	pts := *pes.Header.OptionalHeader.PTS
+	nfd.PTS = pts.Base
+	ps.statistics.Type = "AVC"
+	ps.statistics.Pid = pid
+	ps.statistics.PTSSteps = append(ps.statistics.PTSSteps, pts.Base)
+	dts := pes.Header.OptionalHeader.DTS
+	if dts != nil {
+		nfd.DTS = dts.Base
+		ps.statistics.DTSSteps = append(ps.statistics.DTSSteps, dts.Base)
+	}
+	if !o.ShowNALU {
 		jp.print(nfd)
 		return ps, jp.error()
 	}
 
+	data := pes.Data
+	nalus := avc.ExtractNalusFromByteStream(data)
+	firstPS := false
 	for _, nalu := range nalus {
 		seiMsg := ""
 		naluType := avc.GetNaluType(nalu[0])
 		switch naluType {
 		case avc.NALU_SPS:
-			if ps == nil && !firstPS {
-				ps = &avcPS{}
+			if !firstPS {
 				err := ps.setSPS(nalu)
 				if err != nil {
 					return nil, fmt.Errorf("cannot set SPS")
@@ -121,10 +168,11 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (
 }
 
 type avcPS struct {
-	spss     map[uint32]*avc.SPS
-	ppss     map[uint32]*avc.PPS
-	spsnalu  []byte
-	ppsnalus [][]byte
+	spss       map[uint32]*avc.SPS
+	ppss       map[uint32]*avc.PPS
+	spsnalu    []byte
+	ppsnalus   [][]byte
+	statistics streamStatistics
 }
 
 func (a *avcPS) getSPS() *avc.SPS {

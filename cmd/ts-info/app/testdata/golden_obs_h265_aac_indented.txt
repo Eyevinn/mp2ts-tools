@@ -76,3 +76,8 @@
     }
   ]
 }
+{
+  "streamType": "HEVC",
+  "pid": 256,
+  "frameRate": 30
+}

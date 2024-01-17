@@ -15,3 +15,4 @@
 {"pid":256,"rai":false,"pts":37920}
 {"pid":256,"rai":false,"pts":40920}
 {"pid":256,"rai":false,"pts":43920}
+{"streamType":"HEVC","pid":256,"frameRate":30}
