@@ -69,5 +69,8 @@
 {
   "streamType": "AVC",
   "pid": 256,
-  "frameRate": 24
+  "frameRate": 24,
+  "errors": [
+    "Not enough PTS steps to calculate GOP duration"
+  ]
 }

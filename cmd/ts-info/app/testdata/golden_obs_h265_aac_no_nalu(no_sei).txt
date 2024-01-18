@@ -35,4 +35,4 @@
 {"pid":256,"rai":false,"pts":97920}
 {"pid":256,"rai":false,"pts":100920}
 {"pid":256,"rai":false,"pts":103920}
-{"streamType":"HEVC","pid":256,"frameRate":30}
+{"streamType":"HEVC","pid":256,"frameRate":30,"errors":["Not enough PTS steps to calculate GOP duration"]}

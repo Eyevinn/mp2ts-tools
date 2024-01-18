@@ -79,5 +79,8 @@
 {
   "streamType": "HEVC",
   "pid": 256,
-  "frameRate": 30
+  "frameRate": 30,
+  "errors": [
+    "Not enough PTS steps to calculate GOP duration"
+  ]
 }

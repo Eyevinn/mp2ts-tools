@@ -3,7 +3,7 @@ package app
 import (
 	"encoding/hex"
 	"fmt"
-	"sort"
+	"math"
 	"strings"
 
 	"github.com/Eyevinn/mp4ff/avc"
@@ -26,6 +26,8 @@ type streamStatistics struct {
 	IDRPTS         []int64 `json:"-"`
 	RAIGOPDuration int64   `json:"RAIGopDuration,omitempty"`
 	IDRGOPDuration int64   `json:"IDRGopDuration,omitempty"`
+	// Errors
+	Errors []string `json:"errors,omitempty"`
 }
 
 type naluFrameData struct {
@@ -59,19 +61,30 @@ func sliceMinMaxAverage(values []int64) (int64, int64, int64) {
 	return min, max, avg
 }
 
-func sortSliceByIncreasingOrder(values []int64) []int64 {
-	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
-	return values
+func valuesHigherThanZero(values []int64) bool {
+	for i := 0; i < len(values)-1; i++ {
+		if values[i] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func calculateStepsInSlice(values []int64) []int64 {
 	if len(values) < 2 {
 		return nil
 	}
-
+	// Note: we assume that the values are monotonically increasing
+	// PTS/DTS are 33-bit values, so it wraps around after 26.5 hours
+	MAXSTEP := int64(math.Pow(2, 33)) - 1
 	steps := make([]int64, len(values)-1)
 	for i := 0; i < len(values)-1; i++ {
-		steps[i] = values[i+1] - values[i]
+		rawDifference := values[i+1] - values[i]
+		if rawDifference < -MAXSTEP/2 {
+			// if the time stamp was wrapped around, we pad it with MAXSTEP
+			rawDifference = rawDifference + MAXSTEP
+		}
+		steps[i] = rawDifference
 	}
 	return steps
 }
@@ -79,6 +92,7 @@ func calculateStepsInSlice(values []int64) []int64 {
 // Calculate frame rate from DTS or PTS steps
 func (s *streamStatistics) calculateFrameRate(timescale int64) {
 	if len(s.PTSSteps) < 2 && len(s.DTSSteps) < 2 {
+		s.Errors = append(s.Errors, "Not enough PTS/DTS steps to calculate frame rate")
 		return
 	}
 	// Use DTS steps if possible, and PTS steps otherwise
@@ -86,16 +100,21 @@ func (s *streamStatistics) calculateFrameRate(timescale int64) {
 	if len(s.DTSSteps) >= 2 {
 		dataRange = s.DTSSteps
 	}
-	// Sort steps in increasing order
-	sortSliceByIncreasingOrder(dataRange)
-
-	// TODO: Handle wrap-around by removing outliers
 
 	// Calculate steps
-	// Note: dataRange has at least 2 elements
 	steps := calculateStepsInSlice(dataRange)
+	isMonotonicallyIncreasing := valuesHigherThanZero(steps)
+	// dataRange must be monotonically increasing
+	if !isMonotonicallyIncreasing {
+		s.Errors = append(s.Errors, "PTS/DTS steps are not monotonically increasing")
+		fmt.Printf("DataRange: %v\n", dataRange)
+		fmt.Printf("Steps: %v\n", steps)
+		return
+	}
+
 	minStep, maxStep, avgStep := sliceMinMaxAverage(steps)
 	if maxStep != minStep {
+		s.Errors = append(s.Errors, "PTS/DTS steps are not constant")
 		s.MinStep, s.MaxStep, s.AvgStep = minStep, maxStep, avgStep
 	}
 
@@ -107,16 +126,20 @@ func (s *streamStatistics) calculateFrameRate(timescale int64) {
 
 func (s *streamStatistics) calculateGoPDuration(timescale int64) {
 	if len(s.RAIPTS) < 2 && len(s.IDRPTS) < 2 {
+		s.Errors = append(s.Errors, "Not enough PTS steps to calculate GOP duration")
 		return
 	}
-	RAIPTS := sortSliceByIncreasingOrder(s.RAIPTS)
-	IDRPTS := sortSliceByIncreasingOrder(s.IDRPTS)
-
 	// Calculate GOP duration
-	// Note: RAIPTSSteps and IDRPTSSteps have at least 2 elements
-	RAIPTSSteps := calculateStepsInSlice(RAIPTS)
-	IDRPTSSteps := calculateStepsInSlice(IDRPTS)
+	RAIPTSSteps := calculateStepsInSlice(s.RAIPTS)
+	IDRPTSSteps := calculateStepsInSlice(s.IDRPTS)
 
+	// PTS must be monotonically increasing
+	isMonotonicallyIncreasing := valuesHigherThanZero(RAIPTSSteps) && valuesHigherThanZero(IDRPTSSteps)
+	// dataRange must be monotonically increasing
+	if !isMonotonicallyIncreasing {
+		s.Errors = append(s.Errors, "PTS steps are not monotonically increasing")
+		return
+	}
 	_, _, RAIGOPStep := sliceMinMaxAverage(RAIPTSSteps)
 	_, _, IDRGOPStep := sliceMinMaxAverage(IDRPTSSteps)
 	// fmt.Printf("RAIPTSSteps: %v\n", RAIPTSSteps)

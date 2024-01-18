@@ -31,4 +31,4 @@
 {"pid":256,"parameterSet":"PPS","nr":0,"hex":"68ebecb22c","length":5}
 {"pid":256,"rai":true,"pts":223500,"dts":216000,"nalus":[{"type":"AUD_9","len":2},{"type":"SPS_7","len":26},{"type":"PPS_8","len":5},{"type":"IDR_5","len":12975}]}
 {"pid":256,"rai":false,"pts":234750,"dts":219750,"nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":24332}]}
-{"streamType":"AVC","pid":256,"frameRate":23.04147465437788,"maxStep":7500,"minStep":3750,"avgStep":3906,"RAIGopDuration":1,"IDRGopDuration":1}
+{"streamType":"AVC","pid":256,"frameRate":23.04147465437788,"maxStep":7500,"minStep":3750,"avgStep":3906,"RAIGopDuration":1,"IDRGopDuration":1,"errors":["PTS/DTS steps are not constant"]}
