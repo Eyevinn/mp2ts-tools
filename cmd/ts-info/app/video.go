@@ -24,8 +24,8 @@ type streamStatistics struct {
 	// RAI-markers
 	RAIPTS         []int64 `json:"-"`
 	IDRPTS         []int64 `json:"-"`
-	RAIGOPDuration int64   `json:"RAIGopDuration,omitempty"`
-	IDRGOPDuration int64   `json:"IDRGopDuration,omitempty"`
+	RAIGOPDuration int64   `json:"RAIGoPDuration,omitempty"`
+	IDRGOPDuration int64   `json:"IDRGoPDuration,omitempty"`
 	// Errors
 	Errors []string `json:"errors,omitempty"`
 }
@@ -107,8 +107,8 @@ func (s *streamStatistics) calculateFrameRate(timescale int64) {
 	// dataRange must be monotonically increasing
 	if !isMonotonicallyIncreasing {
 		s.Errors = append(s.Errors, "PTS/DTS steps are not monotonically increasing")
-		fmt.Printf("DataRange: %v\n", dataRange)
-		fmt.Printf("Steps: %v\n", steps)
+		// fmt.Printf("DataRange: %v\n", dataRange)
+		// fmt.Printf("Steps: %v\n", steps)
 		return
 	}
 
@@ -125,7 +125,7 @@ func (s *streamStatistics) calculateFrameRate(timescale int64) {
 }
 
 func (s *streamStatistics) calculateGoPDuration(timescale int64) {
-	if len(s.RAIPTS) < 2 && len(s.IDRPTS) < 2 {
+	if len(s.RAIPTS) < 2 || len(s.IDRPTS) < 2 {
 		s.Errors = append(s.Errors, "Not enough PTS steps to calculate GOP duration")
 		return
 	}

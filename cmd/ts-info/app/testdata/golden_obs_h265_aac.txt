@@ -41,4 +41,4 @@
 {"pid":256,"rai":false,"pts":97920,"nalus":[{"type":"AUD_35","len":3},{"type":"NonRAP_Trail_1","len":400}]}
 {"pid":256,"rai":false,"pts":100920,"nalus":[{"type":"AUD_35","len":3},{"type":"NonRAP_Trail_1","len":293}]}
 {"pid":256,"rai":false,"pts":103920,"nalus":[{"type":"AUD_35","len":3},{"type":"NonRAP_Trail_1","len":566}]}
-{"streamType":"HEVC","pid":256,"frameRate":30,"RAIGopDuration":1,"IDRGopDuration":1}
+{"streamType":"HEVC","pid":256,"frameRate":30,"RAIGoPDuration":1,"IDRGoPDuration":1}
