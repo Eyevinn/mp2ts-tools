@@ -24,9 +24,10 @@ const (
 )
 
 type elementaryStream struct {
-	PID   uint16 `json:"pid"`
-	Codec string `json:"codec"`
-	Type  string `json:"type"`
+	PID          uint16 `json:"pid"`
+	Codec        string `json:"codec"`
+	Type         string `json:"type"`
+	VideoBitrate uint32 `json:"videoBitrate,omitempty"`
 }
 
 type sdtServiceDescriptor struct {
@@ -127,6 +128,16 @@ dataLoop:
 				case astits.StreamTypeH265Video:
 					e = &elementaryStream{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
 					esKinds[es.ElementaryPID] = "HEVC"
+				}
+
+				if es.StreamType.IsVideo() && es.ElementaryStreamDescriptors != nil {
+					firstESDescriptor := es.ElementaryStreamDescriptors[0]
+					if firstESDescriptor != nil {
+						maxiMumBitrate := firstESDescriptor.MaximumBitrate
+						if maxiMumBitrate != nil {
+							e.VideoBitrate = maxiMumBitrate.Bitrate
+						}
+					}
 				}
 				if e != nil {
 					jp.print(e)
