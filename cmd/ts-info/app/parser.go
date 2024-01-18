@@ -156,7 +156,7 @@ dataLoop:
 			}
 			nrPics++
 			statistics[d.PID] = &avcPS.statistics
-			if o.MaxNrPictures > 0 && nrPics == o.MaxNrPictures {
+			if nrPics >= o.MaxNrPictures {
 				break dataLoop
 			}
 		case "HEVC":
@@ -173,9 +173,11 @@ dataLoop:
 			}
 			nrPics++
 			statistics[d.PID] = &hevcPS.statistics
-			if o.MaxNrPictures > 0 && nrPics == o.MaxNrPictures {
+			if nrPics >= o.MaxNrPictures {
 				break dataLoop
 			}
+		default:
+			continue
 		}
 	}
 

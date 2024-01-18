@@ -23,7 +23,7 @@ func TestParseFile(t *testing.T) {
 		options              app.Options
 		expected_output_file string
 	}{
-		{"avc_with_time", "../testdata/avc_with_time.ts", app.Options{ParameterSets: true}, "testdata/golden_avc_with_time.txt"},
+		{"avc_with_time", "../testdata/avc_with_time.ts", app.Options{MaxNrPictures: 10, ParameterSets: true}, "testdata/golden_avc_with_time.txt"},
 		{"bbb_1s_no_nalu_no_sei", "testdata/bbb_1s.ts", app.Options{MaxNrPictures: 35}, "testdata/golden_bbb_1s_no_nalu(no_sei).txt"},
 		{"bbb_1s_no_nalu", "testdata/bbb_1s.ts", app.Options{MaxNrPictures: 35, ShowSEI: true}, "testdata/golden_bbb_1s_no_nalu(no_sei).txt"},
 		{"bbb_1s", "testdata/bbb_1s.ts", app.Options{MaxNrPictures: 35, ShowNALU: true, ShowSEI: true}, "testdata/golden_bbb_1s.txt"},
