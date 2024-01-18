@@ -9,3 +9,4 @@
 {"pid":512,"rai":false,"pts":5504400}
 {"pid":512,"rai":false,"pts":5506200}
 {"pid":512,"rai":true,"pts":5508000}
+{"streamType":"AVC","pid":512,"frameRate":50}

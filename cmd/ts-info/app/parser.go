@@ -69,9 +69,9 @@ func (p *jsonPrinter) print(data any) {
 
 func (p *jsonPrinter) printStatistics(s streamStatistics) {
 	// fmt.Fprintf(p.w, "Print statistics for PID: %d\n", s.Pid)
-	// calculate frame rates
-	s.update()
-
+	var TIMESTAMP_FREQUENCY int64 = 90000
+	s.calculateFrameRate(TIMESTAMP_FREQUENCY)
+	s.calculateGoPDuration(TIMESTAMP_FREQUENCY)
 	// TODO: format statistics
 
 	// print statistics

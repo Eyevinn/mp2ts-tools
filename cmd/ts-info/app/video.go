@@ -21,6 +21,11 @@ type streamStatistics struct {
 	MaxStep  int64   `json:"maxStep,omitempty"`
 	MinStep  int64   `json:"minStep,omitempty"`
 	AvgStep  int64   `json:"avgStep,omitempty"`
+	// RAI-markers
+	RAIPTS         []int64 `json:"-"`
+	IDRPTS         []int64 `json:"-"`
+	RAIGOPDuration int64   `json:"RAIGopDuration,omitempty"`
+	IDRGOPDuration int64   `json:"IDRGopDuration,omitempty"`
 }
 
 type naluFrameData struct {
@@ -54,8 +59,25 @@ func sliceMinMaxAverage(values []int64) (int64, int64, int64) {
 	return min, max, avg
 }
 
+func sortSliceByIncreasingOrder(values []int64) []int64 {
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	return values
+}
+
+func calculateStepsInSlice(values []int64) []int64 {
+	if len(values) < 2 {
+		return nil
+	}
+
+	steps := make([]int64, len(values)-1)
+	for i := 0; i < len(values)-1; i++ {
+		steps[i] = values[i+1] - values[i]
+	}
+	return steps
+}
+
 // Calculate frame rate from DTS or PTS steps
-func (s *streamStatistics) update() {
+func (s *streamStatistics) calculateFrameRate(timescale int64) {
 	if len(s.PTSSteps) < 2 && len(s.DTSSteps) < 2 {
 		return
 	}
@@ -65,15 +87,13 @@ func (s *streamStatistics) update() {
 		dataRange = s.DTSSteps
 	}
 	// Sort steps in increasing order
-	sort.Slice(dataRange, func(i, j int) bool { return dataRange[i] < dataRange[j] })
+	sortSliceByIncreasingOrder(dataRange)
 
 	// TODO: Handle wrap-around by removing outliers
 
 	// Calculate steps
-	steps := make([]int64, len(dataRange)-1)
-	for i := 0; i < len(dataRange)-1; i++ {
-		steps[i] = dataRange[i+1] - dataRange[i]
-	}
+	// Note: dataRange has at least 2 elements
+	steps := calculateStepsInSlice(dataRange)
 	minStep, maxStep, avgStep := sliceMinMaxAverage(steps)
 	if maxStep != minStep {
 		s.MinStep, s.MaxStep, s.AvgStep = minStep, maxStep, avgStep
@@ -82,7 +102,27 @@ func (s *streamStatistics) update() {
 	// fmt.Printf("dataRange: %v\n", dataRange)
 	// fmt.Printf("Steps: %v\n", steps)
 	// fmt.Printf("Average step: %f\n", avgStep)
-	s.FrameRate = float64(90000) / float64(avgStep)
+	s.FrameRate = float64(timescale) / float64(avgStep)
+}
+
+func (s *streamStatistics) calculateGoPDuration(timescale int64) {
+	if len(s.RAIPTS) < 2 && len(s.IDRPTS) < 2 {
+		return
+	}
+	RAIPTS := sortSliceByIncreasingOrder(s.RAIPTS)
+	IDRPTS := sortSliceByIncreasingOrder(s.IDRPTS)
+
+	// Calculate GOP duration
+	// Note: RAIPTSSteps and IDRPTSSteps have at least 2 elements
+	RAIPTSSteps := calculateStepsInSlice(RAIPTS)
+	IDRPTSSteps := calculateStepsInSlice(IDRPTS)
+
+	_, _, RAIGOPStep := sliceMinMaxAverage(RAIPTSSteps)
+	_, _, IDRGOPStep := sliceMinMaxAverage(IDRPTSSteps)
+	// fmt.Printf("RAIPTSSteps: %v\n", RAIPTSSteps)
+	// fmt.Printf("RAIGOPStep: %d\n", RAIGOPStep)
+	s.RAIGOPDuration = RAIGOPStep / timescale
+	s.IDRGOPDuration = IDRGOPStep / timescale
 }
 
 func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (*avcPS, error) {
@@ -95,23 +135,23 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (
 	nfd := naluFrameData{
 		PID: pid,
 	}
-	if fp != nil {
-		af := fp.AdaptationField
-		if af != nil {
-			nfd.RAI = af.RandomAccessIndicator
-		}
-	}
 	if ps == nil {
 		// return empty PS to count picture numbers correctly
 		// even if we are not printing NALUs
 		ps = &avcPS{}
 	}
-
 	pts := *pes.Header.OptionalHeader.PTS
 	nfd.PTS = pts.Base
 	ps.statistics.Type = "AVC"
 	ps.statistics.Pid = pid
 	ps.statistics.PTSSteps = append(ps.statistics.PTSSteps, pts.Base)
+	if fp != nil && fp.AdaptationField != nil {
+		nfd.RAI = fp.AdaptationField.RandomAccessIndicator
+		if nfd.RAI {
+			ps.statistics.RAIPTS = append(ps.statistics.IDRPTS, pts.Base)
+		}
+	}
+
 	dts := pes.Header.OptionalHeader.DTS
 	if dts != nil {
 		nfd.DTS = dts.Base
@@ -164,6 +204,8 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (
 				}
 			}
 			seiMsg = strings.Join(seiTexts, ", ")
+		case avc.NALU_IDR:
+			ps.statistics.IDRPTS = append(ps.statistics.IDRPTS, pts.Base)
 		}
 		nfd.NALUS = append(nfd.NALUS, naluData{
 			Type: naluType.String(),

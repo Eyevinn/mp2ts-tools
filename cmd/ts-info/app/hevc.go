@@ -50,30 +50,30 @@ func (a *hevcPS) setPPS(nalu []byte) error {
 func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options) (*hevcPS, error) {
 	pid := d.PID
 	pes := d.PES
+	fp := d.FirstPacket
 	if pes.Header.OptionalHeader.PTS == nil {
 		return nil, fmt.Errorf("no PTS in PES")
 	}
-
 	nfd := naluFrameData{
 		PID: pid,
-	}
-	if d.FirstPacket != nil {
-		af := d.FirstPacket.AdaptationField
-		if af != nil {
-			nfd.RAI = af.RandomAccessIndicator
-		}
 	}
 	if ps == nil {
 		// return empty PS to count picture numbers correctly
 		// even if we are not printing NALUs
 		ps = &hevcPS{}
 	}
-
 	pts := *pes.Header.OptionalHeader.PTS
 	nfd.PTS = pts.Base
 	ps.statistics.Type = "HEVC"
 	ps.statistics.Pid = pid
 	ps.statistics.PTSSteps = append(ps.statistics.PTSSteps, pts.Base)
+	if fp != nil && fp.AdaptationField != nil {
+		nfd.RAI = fp.AdaptationField.RandomAccessIndicator
+		if nfd.RAI {
+			ps.statistics.RAIPTS = append(ps.statistics.IDRPTS, pts.Base)
+		}
+	}
+
 	dts := pes.Header.OptionalHeader.DTS
 	if dts != nil {
 		nfd.DTS = dts.Base
@@ -88,40 +88,8 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 	firstPS := false
 	for _, nalu := range avc.ExtractNalusFromByteStream(data) {
 		naluType := hevc.GetNaluType(nalu[0])
-		switch naluType {
-		case hevc.NALU_SPS:
-			if !firstPS {
-				err := ps.setSPS(nalu)
-				if err != nil {
-					return nil, fmt.Errorf("cannot set SPS")
-				}
-				firstPS = true
-				nfd.NALUS = append(nfd.NALUS, naluData{
-					Type: naluType.String(),
-					Len:  len(nalu),
-					Data: "",
-				})
-			}
-		case hevc.NALU_PPS:
-			if firstPS {
-				err := ps.setPPS(nalu)
-				if err != nil {
-					return nil, fmt.Errorf("cannot set PPS")
-				}
-				nfd.NALUS = append(nfd.NALUS, naluData{
-					Type: naluType.String(),
-					Len:  len(nalu),
-					Data: "",
-				})
-			}
-		case hevc.NALU_VPS:
-			ps.vpsnalu = nalu
-			nfd.NALUS = append(nfd.NALUS, naluData{
-				Type: naluType.String(),
-				Len:  len(nalu),
-				Data: "",
-			})
-		case hevc.NALU_SEI_PREFIX, hevc.NALU_SEI_SUFFIX:
+		// Handle SEI messages separately
+		if naluType == hevc.NALU_SEI_PREFIX || naluType == hevc.NALU_SEI_SUFFIX {
 			if !o.ShowSEI {
 				continue
 			}
@@ -147,13 +115,37 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 					Data: seiMsg.String(),
 				})
 			}
-		default:
-			nfd.NALUS = append(nfd.NALUS, naluData{
-				Type: naluType.String(),
-				Len:  len(nalu),
-				Data: "",
-			})
+
+			continue
 		}
+
+		// Handle other NALUs
+		switch naluType {
+		case hevc.NALU_SPS:
+			if !firstPS {
+				err := ps.setSPS(nalu)
+				if err != nil {
+					return nil, fmt.Errorf("cannot set SPS")
+				}
+				firstPS = true
+			}
+		case hevc.NALU_PPS:
+			if firstPS {
+				err := ps.setPPS(nalu)
+				if err != nil {
+					return nil, fmt.Errorf("cannot set PPS")
+				}
+			}
+		case hevc.NALU_VPS:
+			ps.vpsnalu = nalu
+		case hevc.NALU_IDR_W_RADL, hevc.NALU_IDR_N_LP:
+			ps.statistics.IDRPTS = append(ps.statistics.IDRPTS, pts.Base)
+		}
+		nfd.NALUS = append(nfd.NALUS, naluData{
+			Type: naluType.String(),
+			Len:  len(nalu),
+			Data: "",
+		})
 	}
 
 	if firstPS {
