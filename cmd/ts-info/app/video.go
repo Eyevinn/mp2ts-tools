@@ -41,13 +41,13 @@ type naluData struct {
 	Data string `json:"data,omitempty"`
 }
 
-func sliceMinMaxAverage(values []int64) (int64, int64, int64) {
+func sliceMinMaxAverage(values []int64) (min, max, avg int64) {
 	if len(values) == 0 {
 		return 0, 0, 0
 	}
 
-	min := values[0]
-	max := values[0]
+	min = values[0]
+	max = values[0]
 	sum := int64(0)
 	for _, number := range values {
 		if number < min {
@@ -58,19 +58,19 @@ func sliceMinMaxAverage(values []int64) (int64, int64, int64) {
 		}
 		sum += number
 	}
-	avg := sum / int64(len(values))
+	avg = sum / int64(len(values))
 	return min, max, avg
 }
 
-func calculateStepsInSlice(values []int64) []int64 {
-	if len(values) < 2 {
+func calculateSteps(timestamps []int64) []int64 {
+	if len(timestamps) < 2 {
 		return nil
 	}
-	// Note: we assume that the values are monotonically increasing
+
 	// PTS/DTS are 33-bit values, so it wraps around after 26.5 hours
-	steps := make([]int64, len(values)-1)
-	for i := 0; i < len(values)-1; i++ {
-		steps[i] = SignedPTSDiff(values[i+1], values[i])
+	steps := make([]int64, len(timestamps)-1)
+	for i := 0; i < len(timestamps)-1; i++ {
+		steps[i] = SignedPTSDiff(timestamps[i+1], timestamps[i])
 	}
 	return steps
 }
@@ -78,14 +78,14 @@ func calculateStepsInSlice(values []int64) []int64 {
 // Calculate frame rate from DTS or PTS steps
 func (s *streamStatistics) calculateFrameRate(timescale int64) {
 	if len(s.TimeStamps) < 2 {
-		s.Errors = append(s.Errors, "Too few timestamps to calculate frame rate")
+		s.Errors = append(s.Errors, "too few timestamps to calculate frame rate")
 		return
 	}
 
-	steps := calculateStepsInSlice(s.TimeStamps)
+	steps := calculateSteps(s.TimeStamps)
 	minStep, maxStep, avgStep := sliceMinMaxAverage(steps)
 	if maxStep != minStep {
-		s.Errors = append(s.Errors, "PTS/DTS steps are not constant")
+		s.Errors = append(s.Errors, "irregular PTS/DTS steps")
 		s.MinStep, s.MaxStep, s.AvgStep = minStep, maxStep, avgStep
 	}
 
@@ -96,13 +96,13 @@ func (s *streamStatistics) calculateFrameRate(timescale int64) {
 
 func (s *streamStatistics) calculateGoPDuration(timescale int64) {
 	if len(s.RAIPTS) < 2 || len(s.IDRPTS) < 2 {
-		s.Errors = append(s.Errors, "Too few PTS to calculate GOP duration")
+		s.Errors = append(s.Errors, "no GoP duration since less than 2 I-frames")
 		return
 	}
 
 	// Calculate GOP duration
-	RAIPTSSteps := calculateStepsInSlice(s.RAIPTS)
-	IDRPTSSteps := calculateStepsInSlice(s.IDRPTS)
+	RAIPTSSteps := calculateSteps(s.RAIPTS)
+	IDRPTSSteps := calculateSteps(s.IDRPTS)
 	_, _, RAIGOPStep := sliceMinMaxAverage(RAIPTSSteps)
 	_, _, IDRGOPStep := sliceMinMaxAverage(IDRPTSSteps)
 	// fmt.Printf("RAIPTSSteps: %v\n", RAIPTSSteps)
@@ -140,11 +140,11 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (
 	dts := pes.Header.OptionalHeader.DTS
 	if dts != nil {
 		nfd.DTS = dts.Base
-		ps.statistics.TimeStamps = append(ps.statistics.TimeStamps, dts.Base)
 	} else {
 		// Use PTS as DTS in statistics if DTS is not present
-		ps.statistics.TimeStamps = append(ps.statistics.TimeStamps, pts.Base)
+		nfd.DTS = pts.Base
 	}
+	ps.statistics.TimeStamps = append(ps.statistics.TimeStamps, nfd.DTS)
 
 	if !o.ShowNALU {
 		jp.print(nfd)
@@ -178,7 +178,7 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (
 				continue
 			}
 			var sps *avc.SPS
-			if ps != nil {
+			if firstPS {
 				sps = ps.getSPS()
 			}
 			msgs, err := avc.ParseSEINalu(nalu, sps)
@@ -202,9 +202,7 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (
 			Data: seiMsg,
 		})
 	}
-	if ps == nil {
-		return nil, nil
-	}
+
 	if firstPS {
 		for nr := range ps.spss {
 			printPS(jp, pid, "SPS", nr, ps.spsnalu, ps.spss[nr], o.ParameterSets)

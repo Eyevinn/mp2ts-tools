@@ -42,7 +42,7 @@ func TestCalculateStepsInSlice(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := calculateStepsInSlice(tc.values)
+			got := calculateSteps(tc.values)
 			require.Equal(t, tc.want, got)
 		})
 	}

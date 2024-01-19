@@ -76,11 +76,12 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 	dts := pes.Header.OptionalHeader.DTS
 	if dts != nil {
 		nfd.DTS = dts.Base
-		ps.statistics.TimeStamps = append(ps.statistics.TimeStamps, dts.Base)
 	} else {
 		// Use PTS as DTS in statistics if DTS is not present
-		ps.statistics.TimeStamps = append(ps.statistics.TimeStamps, pts.Base)
+		nfd.DTS = pts.Base
 	}
+	ps.statistics.TimeStamps = append(ps.statistics.TimeStamps, nfd.DTS)
+
 	if !o.ShowNALU {
 		jp.print(nfd)
 		return ps, jp.error()
@@ -123,6 +124,8 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 
 		// Handle other NALUs
 		switch naluType {
+		case hevc.NALU_VPS:
+			ps.vpsnalu = nalu
 		case hevc.NALU_SPS:
 			if !firstPS {
 				err := ps.setSPS(nalu)
@@ -138,8 +141,6 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 					return nil, fmt.Errorf("cannot set PPS")
 				}
 			}
-		case hevc.NALU_VPS:
-			ps.vpsnalu = nalu
 		case hevc.NALU_IDR_W_RADL, hevc.NALU_IDR_N_LP:
 			ps.statistics.IDRPTS = append(ps.statistics.IDRPTS, pts.Base)
 		}
