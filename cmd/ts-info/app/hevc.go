@@ -66,7 +66,6 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 	nfd.PTS = pts.Base
 	ps.statistics.Type = "HEVC"
 	ps.statistics.Pid = pid
-	ps.statistics.PTSSteps = append(ps.statistics.PTSSteps, pts.Base)
 	if fp != nil && fp.AdaptationField != nil {
 		nfd.RAI = fp.AdaptationField.RandomAccessIndicator
 		if nfd.RAI {
@@ -77,7 +76,10 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 	dts := pes.Header.OptionalHeader.DTS
 	if dts != nil {
 		nfd.DTS = dts.Base
-		ps.statistics.DTSSteps = append(ps.statistics.DTSSteps, dts.Base)
+		ps.statistics.TimeStamps = append(ps.statistics.TimeStamps, dts.Base)
+	} else {
+		// Use PTS as DTS in statistics if DTS is not present
+		ps.statistics.TimeStamps = append(ps.statistics.TimeStamps, pts.Base)
 	}
 	if !o.ShowNALU {
 		jp.print(nfd)

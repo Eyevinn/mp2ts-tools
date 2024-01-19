@@ -65,7 +65,7 @@ func run(w io.Writer, o app.Options, inFile string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Handle SIGTERM signal
 	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGTERM)
+	signal.Notify(ch, syscall.SIGINT)
 	go func() {
 		<-ch
 		cancel()

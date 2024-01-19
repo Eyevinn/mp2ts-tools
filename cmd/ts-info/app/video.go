@@ -3,7 +3,6 @@ package app
 import (
 	"encoding/hex"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/Eyevinn/mp4ff/avc"
@@ -12,15 +11,13 @@ import (
 )
 
 type streamStatistics struct {
-	Type      string  `json:"streamType"`
-	Pid       uint16  `json:"pid"`
-	FrameRate float64 `json:"frameRate"`
-	// skip DTSSteps and PTSSteps in json output
-	DTSSteps []int64 `json:"-"`
-	PTSSteps []int64 `json:"-"`
-	MaxStep  int64   `json:"maxStep,omitempty"`
-	MinStep  int64   `json:"minStep,omitempty"`
-	AvgStep  int64   `json:"avgStep,omitempty"`
+	Type       string  `json:"streamType"`
+	Pid        uint16  `json:"pid"`
+	FrameRate  float64 `json:"frameRate"`
+	TimeStamps []int64 `json:"-"`
+	MaxStep    int64   `json:"maxStep,omitempty"`
+	MinStep    int64   `json:"minStep,omitempty"`
+	AvgStep    int64   `json:"avgStep,omitempty"`
 	// RAI-markers
 	RAIPTS         []int64 `json:"-"`
 	IDRPTS         []int64 `json:"-"`
@@ -45,8 +42,12 @@ type naluData struct {
 }
 
 func sliceMinMaxAverage(values []int64) (int64, int64, int64) {
-	min := values[0] //assign the first element equal to min
-	max := values[0] //assign the first element equal to max
+	if len(values) == 0 {
+		return 0, 0, 0
+	}
+
+	min := values[0]
+	max := values[0]
 	sum := int64(0)
 	for _, number := range values {
 		if number < min {
@@ -61,64 +62,33 @@ func sliceMinMaxAverage(values []int64) (int64, int64, int64) {
 	return min, max, avg
 }
 
-func valuesHigherThanZero(values []int64) bool {
-	for i := 0; i < len(values)-1; i++ {
-		if values[i] < 0 {
-			return false
-		}
-	}
-	return true
-}
-
 func calculateStepsInSlice(values []int64) []int64 {
 	if len(values) < 2 {
 		return nil
 	}
 	// Note: we assume that the values are monotonically increasing
 	// PTS/DTS are 33-bit values, so it wraps around after 26.5 hours
-	MAXSTEP := int64(math.Pow(2, 33)) - 1
 	steps := make([]int64, len(values)-1)
 	for i := 0; i < len(values)-1; i++ {
-		rawDifference := values[i+1] - values[i]
-		if rawDifference < -MAXSTEP/2 {
-			// if the time stamp was wrapped around, we pad it with MAXSTEP
-			rawDifference = rawDifference + MAXSTEP
-		}
-		steps[i] = rawDifference
+		steps[i] = SignedPTSDiff(values[i+1], values[i])
 	}
 	return steps
 }
 
 // Calculate frame rate from DTS or PTS steps
 func (s *streamStatistics) calculateFrameRate(timescale int64) {
-	if len(s.PTSSteps) < 2 && len(s.DTSSteps) < 2 {
-		s.Errors = append(s.Errors, "Not enough PTS/DTS steps to calculate frame rate")
-		return
-	}
-	// Use DTS steps if possible, and PTS steps otherwise
-	dataRange := s.PTSSteps
-	if len(s.DTSSteps) >= 2 {
-		dataRange = s.DTSSteps
-	}
-
-	// Calculate steps
-	steps := calculateStepsInSlice(dataRange)
-	isMonotonicallyIncreasing := valuesHigherThanZero(steps)
-	// dataRange must be monotonically increasing
-	if !isMonotonicallyIncreasing {
-		s.Errors = append(s.Errors, "PTS/DTS steps are not monotonically increasing")
-		// fmt.Printf("DataRange: %v\n", dataRange)
-		// fmt.Printf("Steps: %v\n", steps)
+	if len(s.TimeStamps) < 2 {
+		s.Errors = append(s.Errors, "Too few timestamps to calculate frame rate")
 		return
 	}
 
+	steps := calculateStepsInSlice(s.TimeStamps)
 	minStep, maxStep, avgStep := sliceMinMaxAverage(steps)
 	if maxStep != minStep {
 		s.Errors = append(s.Errors, "PTS/DTS steps are not constant")
 		s.MinStep, s.MaxStep, s.AvgStep = minStep, maxStep, avgStep
 	}
 
-	// fmt.Printf("dataRange: %v\n", dataRange)
 	// fmt.Printf("Steps: %v\n", steps)
 	// fmt.Printf("Average step: %f\n", avgStep)
 	s.FrameRate = float64(timescale) / float64(avgStep)
@@ -126,20 +96,13 @@ func (s *streamStatistics) calculateFrameRate(timescale int64) {
 
 func (s *streamStatistics) calculateGoPDuration(timescale int64) {
 	if len(s.RAIPTS) < 2 || len(s.IDRPTS) < 2 {
-		s.Errors = append(s.Errors, "Not enough PTS steps to calculate GOP duration")
+		s.Errors = append(s.Errors, "Too few PTS to calculate GOP duration")
 		return
 	}
+
 	// Calculate GOP duration
 	RAIPTSSteps := calculateStepsInSlice(s.RAIPTS)
 	IDRPTSSteps := calculateStepsInSlice(s.IDRPTS)
-
-	// PTS must be monotonically increasing
-	isMonotonicallyIncreasing := valuesHigherThanZero(RAIPTSSteps) && valuesHigherThanZero(IDRPTSSteps)
-	// dataRange must be monotonically increasing
-	if !isMonotonicallyIncreasing {
-		s.Errors = append(s.Errors, "PTS steps are not monotonically increasing")
-		return
-	}
 	_, _, RAIGOPStep := sliceMinMaxAverage(RAIPTSSteps)
 	_, _, IDRGOPStep := sliceMinMaxAverage(IDRPTSSteps)
 	// fmt.Printf("RAIPTSSteps: %v\n", RAIPTSSteps)
@@ -167,7 +130,6 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (
 	nfd.PTS = pts.Base
 	ps.statistics.Type = "AVC"
 	ps.statistics.Pid = pid
-	ps.statistics.PTSSteps = append(ps.statistics.PTSSteps, pts.Base)
 	if fp != nil && fp.AdaptationField != nil {
 		nfd.RAI = fp.AdaptationField.RandomAccessIndicator
 		if nfd.RAI {
@@ -178,8 +140,12 @@ func parseAVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *avcPS, o Options) (
 	dts := pes.Header.OptionalHeader.DTS
 	if dts != nil {
 		nfd.DTS = dts.Base
-		ps.statistics.DTSSteps = append(ps.statistics.DTSSteps, dts.Base)
+		ps.statistics.TimeStamps = append(ps.statistics.TimeStamps, dts.Base)
+	} else {
+		// Use PTS as DTS in statistics if DTS is not present
+		ps.statistics.TimeStamps = append(ps.statistics.TimeStamps, pts.Base)
 	}
+
 	if !o.ShowNALU {
 		jp.print(nfd)
 		return ps, jp.error()

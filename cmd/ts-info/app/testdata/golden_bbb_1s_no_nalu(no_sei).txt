@@ -27,4 +27,4 @@
 {"pid":256,"rai":false,"pts":216000,"dts":212250}
 {"pid":256,"rai":true,"pts":223500,"dts":216000}
 {"pid":256,"rai":false,"pts":234750,"dts":219750}
-{"streamType":"AVC","pid":256,"frameRate":23.04147465437788,"maxStep":7500,"minStep":3750,"avgStep":3906,"errors":["PTS/DTS steps are not constant","Not enough PTS steps to calculate GOP duration"]}
+{"streamType":"AVC","pid":256,"frameRate":24,"errors":["Too few PTS to calculate GOP duration"]}

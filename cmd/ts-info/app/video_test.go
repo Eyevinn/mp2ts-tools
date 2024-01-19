@@ -31,12 +31,12 @@ func TestCalculateStepsInSlice(t *testing.T) {
 		{
 			name:   "Big values",
 			values: []int64{int64(math.Pow(2, 33)) - 5, int64(math.Pow(2, 33)) - 3, int64(math.Pow(2, 33)) - 1, 2, 4, 6},
-			want:   []int64{2, 2, 2, 2, 2},
+			want:   []int64{2, 2, 3, 2, 2},
 		},
 		{
 			name:   "Big values 2",
 			values: []int64{int64(math.Pow(2, 33)) - 4, int64(math.Pow(2, 33)) - 2, 1, 3, 5, 7},
-			want:   []int64{2, 2, 2, 2, 2},
+			want:   []int64{2, 3, 2, 2, 2},
 		},
 	}
 

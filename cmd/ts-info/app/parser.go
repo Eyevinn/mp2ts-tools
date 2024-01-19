@@ -97,8 +97,10 @@ func Parse(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
 dataLoop:
 	for {
 		// Check if context was cancelled
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			break dataLoop
+		default:
 		}
 
 		d, err := dmx.NextData()
@@ -167,9 +169,6 @@ dataLoop:
 			}
 			nrPics++
 			statistics[d.PID] = &avcPS.statistics
-			if nrPics >= o.MaxNrPictures {
-				break dataLoop
-			}
 		case "HEVC":
 			hevcPS := hevcPSs[d.PID]
 			hevcPS, err = parseHEVCPES(jp, d, hevcPS, o)
@@ -184,11 +183,14 @@ dataLoop:
 			}
 			nrPics++
 			statistics[d.PID] = &hevcPS.statistics
-			if nrPics >= o.MaxNrPictures {
-				break dataLoop
-			}
 		default:
+			// Skip unknown elementary streams
 			continue
+		}
+
+		// Keep looping if MaxNrPictures equals 0
+		if o.MaxNrPictures > 0 && nrPics >= o.MaxNrPictures {
+			break dataLoop
 		}
 	}
 
