@@ -21,6 +21,8 @@ func parseOptions() app.Options {
 	flag.BoolVar(&opts.ParameterSets, "ps", false, "print parameter sets")
 	flag.BoolVar(&opts.Indent, "indent", false, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
+	flag.BoolVar(&opts.ShowNALU, "nalu", false, "print NAL Units")
+	flag.BoolVar(&opts.ShowSEI, "sei", false, "print sei messages")
 
 	flag.Usage = func() {
 		parts := strings.Split(os.Args[0], "/")
@@ -63,7 +65,7 @@ func run(w io.Writer, o app.Options, inFile string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Handle SIGTERM signal
 	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGTERM)
+	signal.Notify(ch, syscall.SIGINT)
 	go func() {
 		<-ch
 		cancel()

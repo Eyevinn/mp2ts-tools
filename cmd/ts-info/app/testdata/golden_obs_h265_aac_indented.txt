@@ -33,6 +33,7 @@
   "pid": 256,
   "rai": true,
   "pts": 1920,
+  "dts": 1920,
   "nalus": [
     {
       "type": "AUD_35",
@@ -65,6 +66,7 @@
   "pid": 256,
   "rai": false,
   "pts": 4920,
+  "dts": 4920,
   "nalus": [
     {
       "type": "AUD_35",
@@ -74,5 +76,13 @@
       "type": "NonRAP_Trail_1",
       "len": 409
     }
+  ]
+}
+{
+  "streamType": "HEVC",
+  "pid": 256,
+  "frameRate": 30,
+  "errors": [
+    "no GoP duration since less than 2 I-frames"
   ]
 }

@@ -66,3 +66,11 @@
     }
   ]
 }
+{
+  "streamType": "AVC",
+  "pid": 256,
+  "frameRate": 24,
+  "errors": [
+    "no GoP duration since less than 2 I-frames"
+  ]
+}

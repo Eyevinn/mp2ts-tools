@@ -15,6 +15,8 @@ type Options struct {
 	ParameterSets bool
 	Version       bool
 	Indent        bool
+	ShowNALU      bool
+	ShowSEI       bool
 }
 
 const (
@@ -22,9 +24,10 @@ const (
 )
 
 type elementaryStream struct {
-	PID   uint16 `json:"pid"`
-	Codec string `json:"codec"`
-	Type  string `json:"type"`
+	PID          uint16 `json:"pid"`
+	Codec        string `json:"codec"`
+	Type         string `json:"type"`
+	VideoBitrate uint32 `json:"videoBitrate,omitempty"`
 }
 
 type sdtServiceDescriptor struct {
@@ -65,6 +68,17 @@ func (p *jsonPrinter) print(data any) {
 	_, p.accError = fmt.Fprintln(p.w, string(out))
 }
 
+func (p *jsonPrinter) printStatistics(s streamStatistics) {
+	// fmt.Fprintf(p.w, "Print statistics for PID: %d\n", s.Pid)
+	const TS_TIMESCALE int64 = 90000
+	s.calculateFrameRate(TS_TIMESCALE)
+	s.calculateGoPDuration(TS_TIMESCALE)
+	// TODO: format statistics
+
+	// print statistics
+	p.print(s)
+}
+
 func (p *jsonPrinter) error() error {
 	return p.accError
 }
@@ -79,12 +93,20 @@ func Parse(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
 	avcPSs := make(map[uint16]*avcPS)
 	hevcPSs := make(map[uint16]*hevcPS)
 	jp := &jsonPrinter{w: w, indent: o.Indent}
+	statistics := make(map[uint16]*streamStatistics)
 dataLoop:
 	for {
+		// Check if context was cancelled
+		select {
+		case <-ctx.Done():
+			break dataLoop
+		default:
+		}
+
 		d, err := dmx.NextData()
 		if err != nil {
 			if err.Error() == "astits: no more packets" {
-				break
+				break dataLoop
 			}
 			return fmt.Errorf("reading next data %w", err)
 		}
@@ -109,6 +131,16 @@ dataLoop:
 					e = &elementaryStream{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
 					esKinds[es.ElementaryPID] = "HEVC"
 				}
+
+				if es.StreamType.IsVideo() && es.ElementaryStreamDescriptors != nil {
+					firstESDescriptor := es.ElementaryStreamDescriptors[0]
+					if firstESDescriptor != nil {
+						maxiMumBitrate := firstESDescriptor.MaximumBitrate
+						if maxiMumBitrate != nil {
+							e.VideoBitrate = maxiMumBitrate.Bitrate
+						}
+					}
+				}
 				if e != nil {
 					jp.print(e)
 				}
@@ -125,7 +157,7 @@ dataLoop:
 		switch esKinds[d.PID] {
 		case "AVC":
 			avcPS := avcPSs[d.PID]
-			avcPS, err = parseAVCPES(jp, d, avcPS, o.ParameterSets)
+			avcPS, err = parseAVCPES(jp, d, avcPS, o)
 			if err != nil {
 				return err
 			}
@@ -136,12 +168,10 @@ dataLoop:
 				avcPSs[d.PID] = avcPS
 			}
 			nrPics++
-			if o.MaxNrPictures > 0 && nrPics == o.MaxNrPictures {
-				break dataLoop
-			}
+			statistics[d.PID] = &avcPS.statistics
 		case "HEVC":
 			hevcPS := hevcPSs[d.PID]
-			hevcPS, err = parseHEVCPES(jp, d, hevcPS, o.ParameterSets)
+			hevcPS, err = parseHEVCPES(jp, d, hevcPS, o)
 			if err != nil {
 				return err
 			}
@@ -152,10 +182,20 @@ dataLoop:
 				hevcPSs[d.PID] = hevcPS
 			}
 			nrPics++
-			if o.MaxNrPictures > 0 && nrPics == o.MaxNrPictures {
-				break dataLoop
-			}
+			statistics[d.PID] = &hevcPS.statistics
+		default:
+			// Skip unknown elementary streams
+			continue
 		}
+
+		// Keep looping if MaxNrPictures equals 0
+		if o.MaxNrPictures > 0 && nrPics >= o.MaxNrPictures {
+			break dataLoop
+		}
+	}
+
+	for _, s := range statistics {
+		jp.printStatistics(*s)
 	}
 	return jp.error()
 }
