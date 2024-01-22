@@ -1,9 +1,10 @@
-package app
+package tests
 
 import (
 	"math"
 	"testing"
 
+	"github.com/Eyevinn/mp2ts-tools/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,7 +43,7 @@ func TestCalculateStepsInSlice(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := calculateSteps(tc.values)
+			got := common.CalculateSteps(tc.values)
 			require.Equal(t, tc.want, got)
 		})
 	}
