@@ -54,7 +54,11 @@
     {
       "type": "SEI_39",
       "len": 31,
-      "data": "SEI type 5, size=26, uuid=\"47564adc5c4c433f94efc5113cd143a8\", payload=\"\\x03\\xee\\x00\\x00\\xee\\x02\\x00\\x0fB@\""
+      "data": [
+        {
+          "msg": "SEIUserDataUnregisteredType (5)"
+        }
+      ]
     },
     {
       "type": "RAP_IDR_20",
