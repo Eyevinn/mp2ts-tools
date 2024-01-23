@@ -127,8 +127,14 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 				}
 			}
 			seiMsg = strings.Join(seiTexts, ", ")
-		case avc.NALU_IDR:
-			ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
+		case avc.NALU_IDR, avc.NALU_NON_IDR:
+			if naluType == avc.NALU_IDR {
+				ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
+			}
+			sliceType, err := avc.GetSliceTypeFromNALU(nalu)
+			if err == nil {
+				nfd.ImgType = fmt.Sprintf("[%s]", sliceType)
+			}
 		}
 		nfd.NALUS = append(nfd.NALUS, internal.NaluData{
 			Type: naluType.String(),
