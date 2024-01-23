@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Calculate frame-rate based on DTS/PTS and print out in JSON format
 - Enable NALU/SEI printing by option
 - Print SDT in JSON format
+- Support for HEVC PicTiming SEI message
+- SEI message data is now also printed as JSON
+
+## Changed
+
+- mp2ts-info and mp2ts-pslister now always print indented output
+- mp2ts-nallister -sei option now turns on details.
 
 ## [0.1.0] - 2024-01-15
 
