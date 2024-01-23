@@ -1,4 +1,4 @@
-package avc
+package internal
 
 import (
 	"bytes"
@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Eyevinn/mp2ts-tools/internal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,10 +16,10 @@ var (
 )
 
 func TestParseFile(t *testing.T) {
-	fullOptionsWith2Pic := internal.CreateFullOptions(2)
+	fullOptionsWith2Pic := CreateFullOptions(2)
 	fullOptionsWith2Pic.Indent = true
-	fullOptionsWith35Pic := internal.CreateFullOptions(35)
-	fullOptionsWith35PicWithoutNALUSEI := internal.CreateFullOptions(35)
+	fullOptionsWith35Pic := CreateFullOptions(35)
+	fullOptionsWith35PicWithoutNALUSEI := CreateFullOptions(35)
 	fullOptionsWith35PicWithoutNALUSEI.ShowNALU = false
 	fullOptionsWith35PicWithoutNALUSEI.ShowSEIDetails = false
 
@@ -30,12 +29,12 @@ func TestParseFile(t *testing.T) {
 	cases := []struct {
 		name                 string
 		file                 string
-		options              internal.Options
+		options              Options
 		expected_output_file string
-		f                    internal.RunableFunc
+		f                    RunableFunc
 	}{
-		{"avc", "testdata/avc_with_time.ts", internal.Options{MaxNrPictures: 10, Indent: true, ShowStreamInfo: true, ShowPS: true, ShowStatistics: true}, "testdata/golden_avc.txt", parseAllFunc},
-		{"avc_without_ps", "testdata/avc_with_time.ts", internal.Options{MaxNrPictures: 10, ShowStreamInfo: true}, "testdata/golden_avc_without_ps.txt", parseInfoFunc},
+		{"avc", "testdata/avc_with_time.ts", Options{MaxNrPictures: 10, Indent: true, ShowStreamInfo: true, ShowPS: true, ShowStatistics: true}, "testdata/golden_avc.txt", parseAllFunc},
+		{"avc_without_ps", "testdata/avc_with_time.ts", Options{MaxNrPictures: 10, ShowStreamInfo: true}, "testdata/golden_avc_without_ps.txt", parseInfoFunc},
 		{"bbb_1s", "testdata/bbb_1s.ts", fullOptionsWith35Pic, "testdata/golden_bbb_1s.txt", parseAllFunc},
 		{"bbb_1s_indented", "testdata/bbb_1s.ts", fullOptionsWith2Pic, "testdata/golden_bbb_1s_indented.txt", parseAllFunc},
 		{"bbb_1s_no_nalu_no_sei", "testdata/bbb_1s.ts", fullOptionsWith35PicWithoutNALUSEI, "testdata/golden_bbb_1s_no_nalu(no_sei).txt", parseAllFunc},

@@ -1,9 +1,8 @@
-package avc
+package internal
 
 import (
 	"fmt"
 
-	"github.com/Eyevinn/mp2ts-tools/internal"
 	"github.com/Eyevinn/mp4ff/avc"
 	"github.com/Eyevinn/mp4ff/sei"
 	"github.com/asticode/go-astits"
@@ -14,7 +13,7 @@ type AvcPS struct {
 	ppss       map[uint32]*avc.PPS
 	spsnalu    []byte
 	ppsnalus   [][]byte
-	Statistics internal.StreamStatistics
+	Statistics StreamStatistics
 }
 
 func (a *AvcPS) getSPS() *avc.SPS {
@@ -56,14 +55,14 @@ func (a *AvcPS) setPPS(nalu []byte) error {
 	return nil
 }
 
-func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o internal.Options) (*AvcPS, error) {
+func ParseAVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o Options) (*AvcPS, error) {
 	pid := d.PID
 	pes := d.PES
 	fp := d.FirstPacket
 	if pes.Header.OptionalHeader.PTS == nil {
 		return nil, fmt.Errorf("no PTS in PES")
 	}
-	nfd := internal.NaluFrameData{
+	nfd := NaluFrameData{
 		PID: pid,
 	}
 	if ps == nil {
@@ -119,24 +118,24 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 			if err != nil {
 				return nil, err
 			}
-			parts := make([]internal.SeiOut, 0, len(msgs))
+			parts := make([]SeiOut, 0, len(msgs))
 			for _, msg := range msgs {
 				t := sei.SEIType(msg.Type())
 				if t == sei.SEIPicTimingType {
 					pt := msg.(*sei.PicTimingAvcSEI)
 					if o.ShowSEIDetails && sps != nil {
-						parts = append(parts, internal.SeiOut{
+						parts = append(parts, SeiOut{
 							Msg:     t.String(),
 							Payload: pt,
 						})
 					} else {
-						parts = append(parts, internal.SeiOut{Msg: t.String()})
+						parts = append(parts, SeiOut{Msg: t.String()})
 					}
 				} else {
 					if o.ShowSEIDetails {
-						parts = append(parts, internal.SeiOut{Msg: t.String(), Payload: msg})
+						parts = append(parts, SeiOut{Msg: t.String(), Payload: msg})
 					} else {
-						parts = append(parts, internal.SeiOut{Msg: t.String()})
+						parts = append(parts, SeiOut{Msg: t.String()})
 					}
 				}
 			}
@@ -150,7 +149,7 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 				nfd.ImgType = fmt.Sprintf("[%s]", sliceType)
 			}
 		}
-		nfd.NALUS = append(nfd.NALUS, internal.NaluData{
+		nfd.NALUS = append(nfd.NALUS, NaluData{
 			Type: naluType.String(),
 			Len:  len(nalu),
 			Data: data,

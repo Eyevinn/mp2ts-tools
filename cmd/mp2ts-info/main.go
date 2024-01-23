@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/Eyevinn/mp2ts-tools/internal"
-	"github.com/Eyevinn/mp2ts-tools/internal/avc"
 )
 
 var usg = `Usage of %s:
@@ -36,7 +35,7 @@ func parseOptions() internal.Options {
 }
 
 func parseInfo(ctx context.Context, w io.Writer, f io.Reader, o internal.Options) error {
-	return avc.ParseInfo(ctx, w, f, o)
+	return internal.ParseInfo(ctx, w, f, o)
 }
 
 func main() {

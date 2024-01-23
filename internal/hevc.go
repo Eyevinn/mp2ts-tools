@@ -1,9 +1,8 @@
-package hevc
+package internal
 
 import (
 	"fmt"
 
-	"github.com/Eyevinn/mp2ts-tools/internal"
 	"github.com/Eyevinn/mp4ff/avc"
 	"github.com/Eyevinn/mp4ff/hevc"
 	"github.com/Eyevinn/mp4ff/sei"
@@ -16,7 +15,7 @@ type HevcPS struct {
 	vpsnalu    []byte
 	spsnalu    []byte
 	ppsnalus   [][]byte
-	Statistics internal.StreamStatistics
+	Statistics StreamStatistics
 }
 
 func (a *HevcPS) setSPS(nalu []byte) error {
@@ -47,14 +46,14 @@ func (a *HevcPS) setPPS(nalu []byte) error {
 	return nil
 }
 
-func ParseHEVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o internal.Options) (*HevcPS, error) {
+func ParseHEVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o Options) (*HevcPS, error) {
 	pid := d.PID
 	pes := d.PES
 	fp := d.FirstPacket
 	if pes.Header.OptionalHeader.PTS == nil {
 		return nil, fmt.Errorf("no PTS in PES")
 	}
-	nfd := internal.NaluFrameData{
+	nfd := NaluFrameData{
 		PID: pid,
 	}
 	if ps == nil {
@@ -114,20 +113,20 @@ func ParseHEVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o
 				if err != nil {
 					return nil, fmt.Errorf("cannot parse SEI NALU")
 				}
-				parts := make([]internal.SeiOut, 0, len(seiMessages))
+				parts := make([]SeiOut, 0, len(seiMessages))
 				for _, seiMsg := range seiMessages {
 					var payload any
 					switch seiMsg.Type() {
 					case sei.SEIPicTimingType:
 						payload = seiMsg.(*sei.PicTimingHevcSEI)
 					}
-					parts = append(parts, internal.SeiOut{Msg: sei.SEIType(seiMsg.Type()).String(), Payload: payload})
+					parts = append(parts, SeiOut{Msg: sei.SEIType(seiMsg.Type()).String(), Payload: payload})
 				}
 				seiData = parts
 			} else {
 				seiData = nil // hex.EncodeToString(nalu)
 			}
-			nfd.NALUS = append(nfd.NALUS, internal.NaluData{
+			nfd.NALUS = append(nfd.NALUS, NaluData{
 				Type: naluType.String(),
 				Len:  len(nalu),
 				Data: seiData,
@@ -136,7 +135,7 @@ func ParseHEVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o
 		case hevc.NALU_IDR_W_RADL, hevc.NALU_IDR_N_LP:
 			ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
 		}
-		nfd.NALUS = append(nfd.NALUS, internal.NaluData{
+		nfd.NALUS = append(nfd.NALUS, NaluData{
 			Type: naluType.String(),
 			Len:  len(nalu),
 			Data: nil,

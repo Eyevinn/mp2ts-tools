@@ -1,4 +1,4 @@
-package avc
+package internal
 
 import (
 	"bufio"
@@ -6,22 +6,20 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/Eyevinn/mp2ts-tools/internal"
-	"github.com/Eyevinn/mp2ts-tools/internal/hevc"
 	"github.com/asticode/go-astits"
 )
 
-func ParseAll(ctx context.Context, w io.Writer, f io.Reader, o internal.Options) error {
-	rd := bufio.NewReaderSize(f, 1000*internal.PacketSize)
+func ParseAll(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
+	rd := bufio.NewReaderSize(f, 1000*PacketSize)
 	dmx := astits.NewDemuxer(ctx, rd)
 	pmtPID := -1
 	nrPics := 0
 	sdtPrinted := false
 	esKinds := make(map[uint16]string)
 	avcPSs := make(map[uint16]*AvcPS)
-	hevcPSs := make(map[uint16]*hevc.HevcPS)
-	jp := &internal.JsonPrinter{W: w, Indent: o.Indent}
-	statistics := make(map[uint16]*internal.StreamStatistics)
+	hevcPSs := make(map[uint16]*HevcPS)
+	jp := &JsonPrinter{W: w, Indent: o.Indent}
+	statistics := make(map[uint16]*StreamStatistics)
 dataLoop:
 	for {
 		// Check if context was cancelled
@@ -49,16 +47,16 @@ dataLoop:
 		if pmtPID < 0 && d.PMT != nil {
 			// Loop through elementary streams
 			for _, es := range d.PMT.ElementaryStreams {
-				var streamInfo *internal.ElementaryStreamInfo
+				var streamInfo *ElementaryStreamInfo
 				switch es.StreamType {
 				case astits.StreamTypeH264Video:
-					streamInfo = &internal.ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AVC", Type: "video"}
+					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AVC", Type: "video"}
 					esKinds[es.ElementaryPID] = "AVC"
 				case astits.StreamTypeAACAudio:
-					streamInfo = &internal.ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AAC", Type: "audio"}
+					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AAC", Type: "audio"}
 					esKinds[es.ElementaryPID] = "AAC"
 				case astits.StreamTypeH265Video:
-					streamInfo = &internal.ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
+					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
 					esKinds[es.ElementaryPID] = "HEVC"
 				}
 
@@ -93,7 +91,7 @@ dataLoop:
 			statistics[d.PID] = &avcPS.Statistics
 		case "HEVC":
 			hevcPS := hevcPSs[d.PID]
-			hevcPS, err = hevc.ParseHEVCPES(jp, d, hevcPS, o)
+			hevcPS, err = ParseHEVCPES(jp, d, hevcPS, o)
 			if err != nil {
 				return err
 			}
@@ -123,11 +121,11 @@ dataLoop:
 	return jp.Error()
 }
 
-func ParseInfo(ctx context.Context, w io.Writer, f io.Reader, o internal.Options) error {
-	rd := bufio.NewReaderSize(f, 1000*internal.PacketSize)
+func ParseInfo(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
+	rd := bufio.NewReaderSize(f, 1000*PacketSize)
 	dmx := astits.NewDemuxer(ctx, rd)
 	pmtPID := -1
-	jp := &internal.JsonPrinter{W: w, Indent: o.Indent}
+	jp := &JsonPrinter{W: w, Indent: o.Indent}
 dataLoop:
 	for {
 		// Check if context was cancelled
@@ -149,14 +147,14 @@ dataLoop:
 		if pmtPID < 0 && d.PMT != nil {
 			// Loop through elementary streams
 			for _, es := range d.PMT.ElementaryStreams {
-				var streamInfo *internal.ElementaryStreamInfo
+				var streamInfo *ElementaryStreamInfo
 				switch es.StreamType {
 				case astits.StreamTypeH264Video:
-					streamInfo = &internal.ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AVC", Type: "video"}
+					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AVC", Type: "video"}
 				case astits.StreamTypeAACAudio:
-					streamInfo = &internal.ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AAC", Type: "audio"}
+					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AAC", Type: "audio"}
 				case astits.StreamTypeH265Video:
-					streamInfo = &internal.ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
+					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
 				}
 
 				if streamInfo != nil {
