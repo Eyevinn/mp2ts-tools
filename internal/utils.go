@@ -20,12 +20,12 @@ type Options struct {
 	ShowPS         bool
 	VerbosePSInfo  bool
 	ShowNALU       bool
-	ShowSEI        bool
+	ShowSEIDetails bool
 	ShowStatistics bool
 }
 
 func CreateFullOptions(max int) Options {
-	return Options{MaxNrPictures: max, ShowStreamInfo: true, ShowService: true, ShowPS: true, ShowNALU: true, ShowSEI: true, ShowStatistics: true}
+	return Options{MaxNrPictures: max, ShowStreamInfo: true, ShowService: true, ShowPS: true, ShowNALU: true, ShowSEIDetails: true, ShowStatistics: true}
 }
 
 type OptionParseFunc func() Options

@@ -19,7 +19,14 @@ type AvcPS struct {
 }
 
 func (a *AvcPS) getSPS() *avc.SPS {
-	return a.spss[0]
+	if len(a.spss) == 0 {
+		return nil
+	}
+	for _, sps := range a.spss {
+		return sps
+	}
+	// Not reachable
+	return nil
 }
 
 func (a *AvcPS) setSPS(nalu []byte) error {
@@ -108,22 +115,28 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 				}
 			}
 		case avc.NALU_SEI:
-			if !o.ShowSEI {
-				continue
-			}
-			var sps *avc.SPS
-			if firstPS {
-				sps = ps.getSPS()
-			}
+			sps := ps.getSPS()
 			msgs, err := avc.ParseSEINalu(nalu, sps)
 			if err != nil {
 				return nil, err
 			}
 			seiTexts := make([]string, 0, len(msgs))
 			for _, msg := range msgs {
-				if msg.Type() == sei.SEIPicTimingType {
+				t := sei.SEIType(msg.Type())
+				if t == sei.SEIPicTimingType {
 					pt := msg.(*sei.PicTimingAvcSEI)
-					seiTexts = append(seiTexts, fmt.Sprintf("Type 1: %s", pt.Clocks[0]))
+					if o.ShowSEIDetails && sps != nil {
+						seiTexts = append(seiTexts, fmt.Sprintf("msg %s: %s", t, pt.Clocks[0]))
+					} else {
+						seiTexts = append(seiTexts, fmt.Sprintf("msg %s", t))
+					}
+				} else {
+					if o.ShowSEIDetails {
+						seiTexts = append(seiTexts, msg.String())
+					} else {
+						seiTexts = append(seiTexts, fmt.Sprintf("msg %s", t))
+					}
+
 				}
 			}
 			seiMsg = strings.Join(seiTexts, ", ")

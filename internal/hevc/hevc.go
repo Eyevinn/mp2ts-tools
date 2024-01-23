@@ -89,7 +89,7 @@ func ParseHEVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o
 		naluType := hevc.GetNaluType(nalu[0])
 		// Handle SEI messages separately
 		if naluType == hevc.NALU_SEI_PREFIX || naluType == hevc.NALU_SEI_SUFFIX {
-			if !o.ShowSEI {
+			if !o.ShowSEIDetails {
 				continue
 			}
 			var hdrLen = 2

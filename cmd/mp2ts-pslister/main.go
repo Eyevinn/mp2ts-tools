@@ -19,7 +19,7 @@ var usg = `Usage of %s:
 `
 
 func parseOptions() internal.Options {
-	opts := internal.Options{ShowStreamInfo: true, ShowService: false, ShowPS: true, Indent: true, ShowNALU: false, ShowSEI: false, ShowStatistics: false}
+	opts := internal.Options{ShowStreamInfo: true, ShowService: false, ShowPS: true, Indent: true, ShowNALU: false, ShowSEIDetails: false, ShowStatistics: false}
 	flag.IntVar(&opts.MaxNrPictures, "max", 0, "max nr pictures to parse")
 	flag.BoolVar(&opts.VerbosePSInfo, "ps", false, "show verbose information")
 	flag.BoolVar(&opts.Version, "version", false, "print version")

@@ -19,9 +19,9 @@ var usg = `Usage of %s:
 `
 
 func parseOptions() internal.Options {
-	opts := internal.Options{ShowStreamInfo: true, ShowService: false, ShowPS: false, ShowNALU: true, ShowSEI: false, ShowStatistics: true}
+	opts := internal.Options{ShowStreamInfo: true, ShowService: false, ShowPS: false, ShowNALU: true, ShowSEIDetails: false, ShowStatistics: true}
 	flag.IntVar(&opts.MaxNrPictures, "max", 0, "max nr pictures to parse")
-	flag.BoolVar(&opts.ShowSEI, "sei", false, "print sei messages")
+	flag.BoolVar(&opts.ShowSEIDetails, "sei", false, "print detailed sei message information")
 	flag.BoolVar(&opts.Indent, "indent", false, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
 

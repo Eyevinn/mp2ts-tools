@@ -22,7 +22,7 @@ func TestParseFile(t *testing.T) {
 	fullOptionsWith35Pic := internal.CreateFullOptions(35)
 	fullOptionsWith35PicWithoutNALUSEI := internal.CreateFullOptions(35)
 	fullOptionsWith35PicWithoutNALUSEI.ShowNALU = false
-	fullOptionsWith35PicWithoutNALUSEI.ShowSEI = false
+	fullOptionsWith35PicWithoutNALUSEI.ShowSEIDetails = false
 
 	parseInfoFunc := ParseInfo
 	parseAllFunc := ParseAll
