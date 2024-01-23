@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Eyevinn/mp2ts-tools/avc"
-	"github.com/Eyevinn/mp2ts-tools/common"
+	"github.com/Eyevinn/mp2ts-tools/internal"
+	"github.com/Eyevinn/mp2ts-tools/internal/avc"
 )
 
 var usg = `Usage of %s:
@@ -18,8 +18,8 @@ var usg = `Usage of %s:
 %s generates a list of nalus with information about timestamps, rai, SEI etc.
 `
 
-func parseOptions() common.Options {
-	opts := common.Options{ShowStreamInfo: true, ShowService: false, ShowPS: false, ShowNALU: true, ShowSEI: false, ShowStatistics: true}
+func parseOptions() internal.Options {
+	opts := internal.Options{ShowStreamInfo: true, ShowService: false, ShowPS: false, ShowNALU: true, ShowSEI: false, ShowStatistics: true}
 	flag.IntVar(&opts.MaxNrPictures, "max", 0, "max nr pictures to parse")
 	flag.BoolVar(&opts.ShowSEI, "sei", false, "print sei messages")
 	flag.BoolVar(&opts.Indent, "indent", false, "indent JSON output")
@@ -37,13 +37,13 @@ func parseOptions() common.Options {
 	return opts
 }
 
-func printNALInfo(ctx context.Context, w io.Writer, f io.Reader, o common.Options) error {
+func parseNALUInfo(ctx context.Context, w io.Writer, f io.Reader, o internal.Options) error {
 	return avc.ParseAll(ctx, w, f, o)
 }
 
 func main() {
-	o, inFile := common.ParseParams(parseOptions)
-	err := common.Execute(os.Stdout, o, inFile, printNALInfo)
+	o, inFile := internal.ParseParams(parseOptions)
+	err := internal.Execute(os.Stdout, o, inFile, parseNALUInfo)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package common
+package internal
 
 type StreamStatistics struct {
 	Type       string  `json:"streamType"`

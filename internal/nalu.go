@@ -1,4 +1,4 @@
-package common
+package internal
 
 type NaluFrameData struct {
 	PID   uint16     `json:"pid"`

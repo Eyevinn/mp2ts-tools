@@ -1,4 +1,4 @@
-package common
+package internal
 
 import (
 	"context"
@@ -9,8 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-
-	"github.com/Eyevinn/mp2ts-tools/internal"
 )
 
 type Options struct {
@@ -36,7 +34,7 @@ type RunableFunc func(ctx context.Context, w io.Writer, f io.Reader, o Options) 
 func ParseParams(function OptionParseFunc) (o Options, inFile string) {
 	o = function()
 	if o.Version {
-		fmt.Printf("ts-info version %s\n", internal.GetVersion())
+		fmt.Printf("ts-info version %s\n", GetVersion())
 		os.Exit(0)
 	}
 	if len(flag.Args()) < 1 {

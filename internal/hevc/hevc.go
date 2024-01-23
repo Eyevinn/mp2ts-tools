@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/Eyevinn/mp2ts-tools/common"
+	"github.com/Eyevinn/mp2ts-tools/internal"
 	"github.com/Eyevinn/mp4ff/avc"
 	"github.com/Eyevinn/mp4ff/hevc"
 	"github.com/Eyevinn/mp4ff/sei"
@@ -17,7 +17,7 @@ type HevcPS struct {
 	vpsnalu    []byte
 	spsnalu    []byte
 	ppsnalus   [][]byte
-	Statistics common.StreamStatistics
+	Statistics internal.StreamStatistics
 }
 
 func (a *HevcPS) setSPS(nalu []byte) error {
@@ -48,14 +48,14 @@ func (a *HevcPS) setPPS(nalu []byte) error {
 	return nil
 }
 
-func ParseHEVCPES(jp *common.JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o common.Options) (*HevcPS, error) {
+func ParseHEVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o internal.Options) (*HevcPS, error) {
 	pid := d.PID
 	pes := d.PES
 	fp := d.FirstPacket
 	if pes.Header.OptionalHeader.PTS == nil {
 		return nil, fmt.Errorf("no PTS in PES")
 	}
-	nfd := common.NaluFrameData{
+	nfd := internal.NaluFrameData{
 		PID: pid,
 	}
 	if ps == nil {
@@ -108,7 +108,7 @@ func ParseHEVCPES(jp *common.JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o c
 					continue
 				}
 
-				nfd.NALUS = append(nfd.NALUS, common.NaluData{
+				nfd.NALUS = append(nfd.NALUS, internal.NaluData{
 					Type: naluType.String(),
 					Len:  len(nalu),
 					Data: seiMsg.String(),
@@ -140,7 +140,7 @@ func ParseHEVCPES(jp *common.JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o c
 		case hevc.NALU_IDR_W_RADL, hevc.NALU_IDR_N_LP:
 			ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
 		}
-		nfd.NALUS = append(nfd.NALUS, common.NaluData{
+		nfd.NALUS = append(nfd.NALUS, internal.NaluData{
 			Type: naluType.String(),
 			Len:  len(nalu),
 			Data: "",

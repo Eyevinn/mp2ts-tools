@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Eyevinn/mp2ts-tools/common"
+	"github.com/Eyevinn/mp2ts-tools/internal"
 	"github.com/Eyevinn/mp4ff/avc"
 	"github.com/Eyevinn/mp4ff/sei"
 	"github.com/asticode/go-astits"
@@ -15,7 +15,7 @@ type AvcPS struct {
 	ppss       map[uint32]*avc.PPS
 	spsnalu    []byte
 	ppsnalus   [][]byte
-	Statistics common.StreamStatistics
+	Statistics internal.StreamStatistics
 }
 
 func (a *AvcPS) getSPS() *avc.SPS {
@@ -50,14 +50,14 @@ func (a *AvcPS) setPPS(nalu []byte) error {
 	return nil
 }
 
-func ParseAVCPES(jp *common.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o common.Options) (*AvcPS, error) {
+func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o internal.Options) (*AvcPS, error) {
 	pid := d.PID
 	pes := d.PES
 	fp := d.FirstPacket
 	if pes.Header.OptionalHeader.PTS == nil {
 		return nil, fmt.Errorf("no PTS in PES")
 	}
-	nfd := common.NaluFrameData{
+	nfd := internal.NaluFrameData{
 		PID: pid,
 	}
 	if ps == nil {
@@ -130,7 +130,7 @@ func ParseAVCPES(jp *common.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o com
 		case avc.NALU_IDR:
 			ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
 		}
-		nfd.NALUS = append(nfd.NALUS, common.NaluData{
+		nfd.NALUS = append(nfd.NALUS, internal.NaluData{
 			Type: naluType.String(),
 			Len:  len(nalu),
 			Data: seiMsg,
