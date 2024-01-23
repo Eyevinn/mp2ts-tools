@@ -11,27 +11,33 @@ MPEG-2 Transport Stream is a very wide spread format for transporting media.
 This repo provides some tools to facilitate analysis and extraction of
 data from MPEG-2 TS streams.
 
-## ts-info
+## mp2ts-info
 
-`ts-info` is a tool that parses a TS file, or a stream on stdin, and prints
+`mp2ts-info` is a tool that parses a TS file, or a stream on stdin, and prints
 information about the video streams in JSON format.
-For AVC (H.264), it shows information about
-PTS/DTS, PicTiming SEI, SPS and PPS, and NAL units.
+
+## mp2ts-pslister
+
+`mp2ts-pslister` is a tool that shows information about SPS, PPS (and VPS in H.265) in a TS file.
+
+## mp2ts-nallister
+
+`mp2ts-nallister` is a tool that shows information about PTS/DTS, PicTiming SEI, and NAL units.
 
 ## How to run
 
 You can download and install any tool directly using
 
 ```sh
-> go install github.com/Eyevinn/mp2ts-tools/cmd/ts-info@latest
+> go install github.com/Eyevinn/mp2ts-tools/cmd/mp2ts-info@latest
 ```
 
 If you have the source code you should be able to run a tool like
 
 ```sh
-> cd cmd/ts-info
+> cd cmd/mp2ts-info
 > go mod tidy
-> go run .
+> go run . h
 ```
 
 Alternatively, you can use the Makefile to build the tools
