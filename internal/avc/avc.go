@@ -2,7 +2,6 @@ package avc
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/Eyevinn/mp2ts-tools/internal"
 	"github.com/Eyevinn/mp4ff/avc"
@@ -96,7 +95,7 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 	nalus := avc.ExtractNalusFromByteStream(data)
 	firstPS := false
 	for _, nalu := range nalus {
-		seiMsg := ""
+		var data any
 		naluType := avc.GetNaluType(nalu[0])
 		switch naluType {
 		case avc.NALU_SPS:
@@ -120,25 +119,28 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 			if err != nil {
 				return nil, err
 			}
-			seiTexts := make([]string, 0, len(msgs))
+			parts := make([]internal.SeiOut, 0, len(msgs))
 			for _, msg := range msgs {
 				t := sei.SEIType(msg.Type())
 				if t == sei.SEIPicTimingType {
 					pt := msg.(*sei.PicTimingAvcSEI)
 					if o.ShowSEIDetails && sps != nil {
-						seiTexts = append(seiTexts, fmt.Sprintf("msg %s: %s", t, pt.Clocks[0]))
+						parts = append(parts, internal.SeiOut{
+							Msg:     t.String(),
+							Payload: pt,
+						})
 					} else {
-						seiTexts = append(seiTexts, fmt.Sprintf("msg %s", t))
+						parts = append(parts, internal.SeiOut{Msg: t.String()})
 					}
 				} else {
 					if o.ShowSEIDetails {
-						seiTexts = append(seiTexts, msg.String())
+						parts = append(parts, internal.SeiOut{Msg: t.String(), Payload: msg})
 					} else {
-						seiTexts = append(seiTexts, fmt.Sprintf("msg %s", t))
+						parts = append(parts, internal.SeiOut{Msg: t.String()})
 					}
-
 				}
 			}
+<<<<<<< HEAD
 			seiMsg = strings.Join(seiTexts, ", ")
 		case avc.NALU_IDR, avc.NALU_NON_IDR:
 			if naluType == avc.NALU_IDR {
@@ -148,11 +150,17 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 			if err == nil {
 				nfd.ImgType = fmt.Sprintf("[%s]", sliceType)
 			}
+=======
+			data = parts
+
+		case avc.NALU_IDR:
+			ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
+>>>>>>> b2696aa (feat: nicer printout of SEI messages including AVC and HEVC pictiming)
 		}
 		nfd.NALUS = append(nfd.NALUS, internal.NaluData{
 			Type: naluType.String(),
 			Len:  len(nalu),
-			Data: seiMsg,
+			Data: data,
 		})
 	}
 
