@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/Eyevinn/mp2ts-tools/internal"
-	"github.com/Eyevinn/mp2ts-tools/internal/avc"
 )
 
 var usg = `Usage of %s:
@@ -19,10 +18,9 @@ var usg = `Usage of %s:
 `
 
 func parseOptions() internal.Options {
-	opts := internal.Options{ShowStreamInfo: true, ShowService: false, ShowPS: true, ShowNALU: false, ShowSEI: false, ShowStatistics: false}
+	opts := internal.Options{ShowStreamInfo: true, ShowService: false, ShowPS: true, Indent: true, ShowNALU: false, ShowSEIDetails: false, ShowStatistics: false}
 	flag.IntVar(&opts.MaxNrPictures, "max", 0, "max nr pictures to parse")
 	flag.BoolVar(&opts.VerbosePSInfo, "ps", false, "show verbose information")
-	flag.BoolVar(&opts.Indent, "indent", true, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
 
 	flag.Usage = func() {
@@ -38,7 +36,7 @@ func parseOptions() internal.Options {
 }
 
 func parsePSInfo(ctx context.Context, w io.Writer, f io.Reader, o internal.Options) error {
-	return avc.ParseAll(ctx, w, f, o)
+	return internal.ParseAll(ctx, w, f, o)
 }
 
 func main() {

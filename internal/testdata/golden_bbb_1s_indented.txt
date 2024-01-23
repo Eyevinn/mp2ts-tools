@@ -35,7 +35,15 @@
     },
     {
       "type": "SEI_6",
-      "len": 701
+      "len": 701,
+      "data": [
+        {
+          "msg": "SEIUserDataUnregisteredType (5)",
+          "payload": {
+            "UUID": "3EXpvebZSLeWLNgg2SPu7w=="
+          }
+        }
+      ]
     },
     {
       "type": "SPS_7",

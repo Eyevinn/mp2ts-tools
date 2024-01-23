@@ -12,5 +12,10 @@ type NaluFrameData struct {
 type NaluData struct {
 	Type string `json:"type"`
 	Len  int    `json:"len"`
-	Data string `json:"data,omitempty"`
+	Data any    `json:"data,omitempty"`
+}
+
+type SeiOut struct {
+	Msg     string `json:"msg"`
+	Payload any    `json:"payload,omitempty"`
 }

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/Eyevinn/mp2ts-tools/internal"
-	"github.com/Eyevinn/mp2ts-tools/internal/avc"
 )
 
 var usg = `Usage of %s:
@@ -19,9 +18,8 @@ var usg = `Usage of %s:
 `
 
 func parseOptions() internal.Options {
-	opts := internal.Options{ShowStreamInfo: true}
+	opts := internal.Options{ShowStreamInfo: true, Indent: true}
 	flag.BoolVar(&opts.ShowService, "service", false, "show service information")
-	flag.BoolVar(&opts.Indent, "indent", true, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
 
 	flag.Usage = func() {
@@ -37,7 +35,7 @@ func parseOptions() internal.Options {
 }
 
 func parseInfo(ctx context.Context, w io.Writer, f io.Reader, o internal.Options) error {
-	return avc.ParseInfo(ctx, w, f, o)
+	return internal.ParseInfo(ctx, w, f, o)
 }
 
 func main() {

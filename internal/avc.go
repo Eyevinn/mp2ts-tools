@@ -1,10 +1,8 @@
-package avc
+package internal
 
 import (
 	"fmt"
-	"strings"
 
-	"github.com/Eyevinn/mp2ts-tools/internal"
 	"github.com/Eyevinn/mp4ff/avc"
 	"github.com/Eyevinn/mp4ff/sei"
 	"github.com/asticode/go-astits"
@@ -15,11 +13,18 @@ type AvcPS struct {
 	ppss       map[uint32]*avc.PPS
 	spsnalu    []byte
 	ppsnalus   [][]byte
-	Statistics internal.StreamStatistics
+	Statistics StreamStatistics
 }
 
 func (a *AvcPS) getSPS() *avc.SPS {
-	return a.spss[0]
+	if len(a.spss) == 0 {
+		return nil
+	}
+	for _, sps := range a.spss {
+		return sps
+	}
+	// Not reachable
+	return nil
 }
 
 func (a *AvcPS) setSPS(nalu []byte) error {
@@ -50,14 +55,14 @@ func (a *AvcPS) setPPS(nalu []byte) error {
 	return nil
 }
 
-func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o internal.Options) (*AvcPS, error) {
+func ParseAVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o Options) (*AvcPS, error) {
 	pid := d.PID
 	pes := d.PES
 	fp := d.FirstPacket
 	if pes.Header.OptionalHeader.PTS == nil {
 		return nil, fmt.Errorf("no PTS in PES")
 	}
-	nfd := internal.NaluFrameData{
+	nfd := NaluFrameData{
 		PID: pid,
 	}
 	if ps == nil {
@@ -89,7 +94,7 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 	nalus := avc.ExtractNalusFromByteStream(data)
 	firstPS := false
 	for _, nalu := range nalus {
-		seiMsg := ""
+		var data any
 		naluType := avc.GetNaluType(nalu[0])
 		switch naluType {
 		case avc.NALU_SPS:
@@ -108,25 +113,33 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 				}
 			}
 		case avc.NALU_SEI:
-			if !o.ShowSEI {
-				continue
-			}
-			var sps *avc.SPS
-			if firstPS {
-				sps = ps.getSPS()
-			}
+			sps := ps.getSPS()
 			msgs, err := avc.ParseSEINalu(nalu, sps)
 			if err != nil {
 				return nil, err
 			}
-			seiTexts := make([]string, 0, len(msgs))
+			parts := make([]SeiOut, 0, len(msgs))
 			for _, msg := range msgs {
-				if msg.Type() == sei.SEIPicTimingType {
+				t := sei.SEIType(msg.Type())
+				if t == sei.SEIPicTimingType {
 					pt := msg.(*sei.PicTimingAvcSEI)
-					seiTexts = append(seiTexts, fmt.Sprintf("Type 1: %s", pt.Clocks[0]))
+					if o.ShowSEIDetails && sps != nil {
+						parts = append(parts, SeiOut{
+							Msg:     t.String(),
+							Payload: pt,
+						})
+					} else {
+						parts = append(parts, SeiOut{Msg: t.String()})
+					}
+				} else {
+					if o.ShowSEIDetails {
+						parts = append(parts, SeiOut{Msg: t.String(), Payload: msg})
+					} else {
+						parts = append(parts, SeiOut{Msg: t.String()})
+					}
 				}
 			}
-			seiMsg = strings.Join(seiTexts, ", ")
+			data = parts
 		case avc.NALU_IDR, avc.NALU_NON_IDR:
 			if naluType == avc.NALU_IDR {
 				ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
@@ -136,10 +149,10 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 				nfd.ImgType = fmt.Sprintf("[%s]", sliceType)
 			}
 		}
-		nfd.NALUS = append(nfd.NALUS, internal.NaluData{
+		nfd.NALUS = append(nfd.NALUS, NaluData{
 			Type: naluType.String(),
 			Len:  len(nalu),
-			Data: seiMsg,
+			Data: data,
 		})
 	}
 
