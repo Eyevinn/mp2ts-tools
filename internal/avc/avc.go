@@ -140,8 +140,7 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 					}
 				}
 			}
-<<<<<<< HEAD
-			seiMsg = strings.Join(seiTexts, ", ")
+			data = parts
 		case avc.NALU_IDR, avc.NALU_NON_IDR:
 			if naluType == avc.NALU_IDR {
 				ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
@@ -150,12 +149,6 @@ func ParseAVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o i
 			if err == nil {
 				nfd.ImgType = fmt.Sprintf("[%s]", sliceType)
 			}
-=======
-			data = parts
-
-		case avc.NALU_IDR:
-			ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
->>>>>>> b2696aa (feat: nicer printout of SEI messages including AVC and HEVC pictiming)
 		}
 		nfd.NALUS = append(nfd.NALUS, internal.NaluData{
 			Type: naluType.String(),
