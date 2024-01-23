@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
 - Calculate GoP duration based on RAI-marker or IDR distance
 - Calculate frame-rate based on DTS/PTS and print out in JSON format
@@ -21,5 +21,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - initial version of the repo
 - ts-info tool
 
-[Unreleased]: https://github.com/Eyevinn/dash-mpd/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/Eyevinn/dash-mpd/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Eyevinn/mp2ts-tools/releases/tag/v0.1.0...HEAD
+[0.1.0]: https://github.com/Eyevinn/mp2ts-tools/releases/tag/v0.1.0

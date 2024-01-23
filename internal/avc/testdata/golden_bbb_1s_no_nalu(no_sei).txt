@@ -1,0 +1,8 @@
+{"pid":256,"codec":"AVC","type":"video"}
+{"pid":257,"codec":"AAC","type":"audio"}
+{"pid":256,"parameterSet":"SPS","nr":0,"hex":"6764001facd9405005bb011000000300100000030300f1831960","length":26}
+{"pid":256,"parameterSet":"PPS","nr":0,"hex":"68ebecb22c","length":5}
+{"SDT":[{"serviceId":1,"descriptors":[{"serviceName":"ts-info","providerName":"Eyevinn Technology"}]}]}
+{"pid":256,"parameterSet":"SPS","nr":0,"hex":"6764001facd9405005bb011000000300100000030300f1831960","length":26}
+{"pid":256,"parameterSet":"PPS","nr":0,"hex":"68ebecb22c","length":5}
+{"streamType":"AVC","pid":256,"frameRate":24,"RAIGoPDuration":1,"IDRGoPDuration":1}

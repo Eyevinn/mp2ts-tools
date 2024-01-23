@@ -1,0 +1,27 @@
+{
+  "pid": 512,
+  "codec": "AVC",
+  "type": "video"
+}
+{
+  "pid": 512,
+  "parameterSet": "SPS",
+  "nr": 0,
+  "hex": "27640020ac2b402802dd80880000030008000003032742001458000510edef7c1da1c32a",
+  "length": 36
+}
+{
+  "pid": 512,
+  "parameterSet": "PPS",
+  "nr": 0,
+  "hex": "28ee3cb0",
+  "length": 4
+}
+{
+  "streamType": "AVC",
+  "pid": 512,
+  "frameRate": 50,
+  "errors": [
+    "no GoP duration since less than 2 I-frames"
+  ]
+}

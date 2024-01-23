@@ -1,25 +1,26 @@
-package app
+package hevc
 
 import (
 	"bytes"
 	"fmt"
 
+	"github.com/Eyevinn/mp2ts-tools/internal"
 	"github.com/Eyevinn/mp4ff/avc"
 	"github.com/Eyevinn/mp4ff/hevc"
 	"github.com/Eyevinn/mp4ff/sei"
 	"github.com/asticode/go-astits"
 )
 
-type hevcPS struct {
+type HevcPS struct {
 	spss       map[uint32]*hevc.SPS
 	ppss       map[uint32]*hevc.PPS
 	vpsnalu    []byte
 	spsnalu    []byte
 	ppsnalus   [][]byte
-	statistics streamStatistics
+	Statistics internal.StreamStatistics
 }
 
-func (a *hevcPS) setSPS(nalu []byte) error {
+func (a *HevcPS) setSPS(nalu []byte) error {
 	if a.spss == nil {
 		a.spss = make(map[uint32]*hevc.SPS, 1)
 		a.ppss = make(map[uint32]*hevc.PPS, 1)
@@ -37,7 +38,7 @@ func (a *hevcPS) setSPS(nalu []byte) error {
 	return nil
 }
 
-func (a *hevcPS) setPPS(nalu []byte) error {
+func (a *HevcPS) setPPS(nalu []byte) error {
 	pps, err := hevc.ParsePPSNALUnit(nalu, a.spss)
 	if err != nil {
 		return err
@@ -47,29 +48,29 @@ func (a *hevcPS) setPPS(nalu []byte) error {
 	return nil
 }
 
-func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options) (*hevcPS, error) {
+func ParseHEVCPES(jp *internal.JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o internal.Options) (*HevcPS, error) {
 	pid := d.PID
 	pes := d.PES
 	fp := d.FirstPacket
 	if pes.Header.OptionalHeader.PTS == nil {
 		return nil, fmt.Errorf("no PTS in PES")
 	}
-	nfd := naluFrameData{
+	nfd := internal.NaluFrameData{
 		PID: pid,
 	}
 	if ps == nil {
 		// return empty PS to count picture numbers correctly
 		// even if we are not printing NALUs
-		ps = &hevcPS{}
+		ps = &HevcPS{}
 	}
 	pts := *pes.Header.OptionalHeader.PTS
 	nfd.PTS = pts.Base
-	ps.statistics.Type = "HEVC"
-	ps.statistics.Pid = pid
+	ps.Statistics.Type = "HEVC"
+	ps.Statistics.Pid = pid
 	if fp != nil && fp.AdaptationField != nil {
 		nfd.RAI = fp.AdaptationField.RandomAccessIndicator
 		if nfd.RAI {
-			ps.statistics.RAIPTS = append(ps.statistics.IDRPTS, pts.Base)
+			ps.Statistics.RAIPTS = append(ps.Statistics.IDRPTS, pts.Base)
 		}
 	}
 
@@ -80,12 +81,7 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 		// Use PTS as DTS in statistics if DTS is not present
 		nfd.DTS = pts.Base
 	}
-	ps.statistics.TimeStamps = append(ps.statistics.TimeStamps, nfd.DTS)
-
-	if !o.ShowNALU {
-		jp.print(nfd)
-		return ps, jp.error()
-	}
+	ps.Statistics.TimeStamps = append(ps.Statistics.TimeStamps, nfd.DTS)
 
 	data := pes.Data
 	firstPS := false
@@ -112,7 +108,7 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 					continue
 				}
 
-				nfd.NALUS = append(nfd.NALUS, naluData{
+				nfd.NALUS = append(nfd.NALUS, internal.NaluData{
 					Type: naluType.String(),
 					Len:  len(nalu),
 					Data: seiMsg.String(),
@@ -142,9 +138,9 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 				}
 			}
 		case hevc.NALU_IDR_W_RADL, hevc.NALU_IDR_N_LP:
-			ps.statistics.IDRPTS = append(ps.statistics.IDRPTS, pts.Base)
+			ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
 		}
-		nfd.NALUS = append(nfd.NALUS, naluData{
+		nfd.NALUS = append(nfd.NALUS, internal.NaluData{
 			Type: naluType.String(),
 			Len:  len(nalu),
 			Data: "",
@@ -152,14 +148,15 @@ func parseHEVCPES(jp *jsonPrinter, d *astits.DemuxerData, ps *hevcPS, o Options)
 	}
 
 	if firstPS {
-		printPS(jp, pid, "VPS", 0, ps.vpsnalu, nil, o.ParameterSets)
+		jp.PrintPS(pid, "VPS", 0, ps.vpsnalu, nil, o.VerbosePSInfo, o.ShowPS)
 		for nr := range ps.spss {
-			printPS(jp, pid, "SPS", nr, ps.spsnalu, ps.spss[nr], o.ParameterSets)
+			jp.PrintPS(pid, "SPS", nr, ps.spsnalu, ps.spss[nr], o.VerbosePSInfo, o.ShowPS)
 		}
 		for nr := range ps.ppss {
-			printPS(jp, pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], o.ParameterSets)
+			jp.PrintPS(pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], o.VerbosePSInfo, o.ShowPS)
 		}
 	}
-	jp.print(nfd)
-	return ps, jp.error()
+
+	jp.Print(nfd, o.ShowNALU)
+	return ps, jp.Error()
 }

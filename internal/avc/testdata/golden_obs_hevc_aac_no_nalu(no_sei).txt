@@ -1,0 +1,9 @@
+{"pid":256,"codec":"HEVC","type":"video"}
+{"pid":257,"codec":"AAC","type":"audio"}
+{"pid":256,"parameterSet":"VPS","nr":0,"hex":"40010c01ffff016000000300b00000030000030078170240","length":24}
+{"pid":256,"parameterSet":"SPS","nr":0,"hex":"420101016000000300b00000030000030078a005020171f2e205ee45914bff2e7f13fa9a8080808040","length":41}
+{"pid":256,"parameterSet":"PPS","nr":0,"hex":"4401c072f05324","length":7}
+{"pid":256,"parameterSet":"VPS","nr":0,"hex":"40010c01ffff016000000300b00000030000030078170240","length":24}
+{"pid":256,"parameterSet":"SPS","nr":0,"hex":"420101016000000300b00000030000030078a005020171f2e205ee45914bff2e7f13fa9a8080808040","length":41}
+{"pid":256,"parameterSet":"PPS","nr":0,"hex":"4401c072f05324","length":7}
+{"streamType":"HEVC","pid":256,"frameRate":30,"RAIGoPDuration":1,"IDRGoPDuration":1}
