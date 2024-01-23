@@ -34,14 +34,14 @@ func TestParseFile(t *testing.T) {
 		expected_output_file string
 		f                    internal.RunableFunc
 	}{
-		{"avc", "testdata/avc_with_time.ts", internal.Options{MaxNrPictures: 10, ShowStreamInfo: true, ShowPS: true, ShowStatistics: true}, "testdata/golden_avc.txt", parseAllFunc},
+		{"avc", "testdata/avc_with_time.ts", internal.Options{MaxNrPictures: 10, Indent: true, ShowStreamInfo: true, ShowPS: true, ShowStatistics: true}, "testdata/golden_avc.txt", parseAllFunc},
 		{"avc_without_ps", "testdata/avc_with_time.ts", internal.Options{MaxNrPictures: 10, ShowStreamInfo: true}, "testdata/golden_avc_without_ps.txt", parseInfoFunc},
 		{"bbb_1s", "testdata/bbb_1s.ts", fullOptionsWith35Pic, "testdata/golden_bbb_1s.txt", parseAllFunc},
 		{"bbb_1s_indented", "testdata/bbb_1s.ts", fullOptionsWith2Pic, "testdata/golden_bbb_1s_indented.txt", parseAllFunc},
 		{"bbb_1s_no_nalu_no_sei", "testdata/bbb_1s.ts", fullOptionsWith35PicWithoutNALUSEI, "testdata/golden_bbb_1s_no_nalu(no_sei).txt", parseAllFunc},
-		{"obs_h265_aac", "testdata/obs_h265_aac.ts", fullOptionsWith35Pic, "testdata/golden_obs_h265_aac.txt", parseAllFunc},
-		{"obs_h265_aac_indented", "testdata/obs_h265_aac.ts", fullOptionsWith2Pic, "testdata/golden_obs_h265_aac_indented.txt", parseAllFunc},
-		{"obs_h265_aac_no_nalu_no_sei", "testdata/obs_h265_aac.ts", fullOptionsWith35PicWithoutNALUSEI, "testdata/golden_obs_h265_aac_no_nalu(no_sei).txt", parseAllFunc},
+		{"obs_hevc_aac", "testdata/obs_hevc_aac.ts", fullOptionsWith35Pic, "testdata/golden_obs_hevc_aac.txt", parseAllFunc},
+		{"obs_hevc_aac_indented", "testdata/obs_hevc_aac.ts", fullOptionsWith2Pic, "testdata/golden_obs_hevc_aac_indented.txt", parseAllFunc},
+		{"obs_hevc_aac_no_nalu_no_sei", "testdata/obs_hevc_aac.ts", fullOptionsWith35PicWithoutNALUSEI, "testdata/golden_obs_hevc_aac_no_nalu(no_sei).txt", parseAllFunc},
 	}
 
 	for _, c := range cases {

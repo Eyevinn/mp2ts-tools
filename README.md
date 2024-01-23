@@ -18,7 +18,7 @@ information about the video streams in JSON format.
 
 ## mp2ts-pslister
 
-`mp2ts-pslister` is a tool that shows information about SPS, PPS (and VPS in H.265) in a TS file.
+`mp2ts-pslister` is a tool that shows information about SPS, PPS (and VPS for HEVC) in a TS file.
 
 ## mp2ts-nallister
 

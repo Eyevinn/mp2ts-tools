@@ -13,13 +13,13 @@ ts-info:
 
 .PHONY: test
 test: prepare
-	go test ./internal/avc/...
+	go test ./...
 
 .PHONY: coverage
 coverage:
 	# Ignore (allow) packages without any tests
 	set -o pipefail
-	go test ./internal/avc/... -coverprofile coverage.out
+	go test ./... -coverprofile coverage.out
 	set +o pipefail
 	go tool cover -html=coverage.out -o coverage.html
 	go tool cover -func coverage.out -o coverage.txt

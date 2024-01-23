@@ -21,7 +21,7 @@ var usg = `Usage of %s:
 func parseOptions() internal.Options {
 	opts := internal.Options{ShowStreamInfo: true}
 	flag.BoolVar(&opts.ShowService, "service", false, "show service information")
-	flag.BoolVar(&opts.Indent, "indent", false, "indent JSON output")
+	flag.BoolVar(&opts.Indent, "indent", true, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
 
 	flag.Usage = func() {

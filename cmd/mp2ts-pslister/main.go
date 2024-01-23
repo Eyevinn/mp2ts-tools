@@ -22,7 +22,7 @@ func parseOptions() internal.Options {
 	opts := internal.Options{ShowStreamInfo: true, ShowService: false, ShowPS: true, ShowNALU: false, ShowSEI: false, ShowStatistics: false}
 	flag.IntVar(&opts.MaxNrPictures, "max", 0, "max nr pictures to parse")
 	flag.BoolVar(&opts.VerbosePSInfo, "ps", false, "show verbose information")
-	flag.BoolVar(&opts.Indent, "indent", false, "indent JSON output")
+	flag.BoolVar(&opts.Indent, "indent", true, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
 
 	flag.Usage = func() {
