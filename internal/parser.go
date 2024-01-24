@@ -2,11 +2,18 @@ package internal
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 
+	"github.com/Comcast/gots/v2/packet"
+	"github.com/Comcast/gots/v2/psi"
+	"github.com/Comcast/gots/v2/scte35"
 	"github.com/asticode/go-astits"
+	chain "github.com/g8rswimmer/error-chain"
 )
 
 func ParseAll(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
@@ -155,6 +162,8 @@ dataLoop:
 					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AAC", Type: "audio"}
 				case astits.StreamTypeH265Video:
 					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
+				case astits.StreamTypeSCTE35:
+					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "SCTE35", Type: "cue"}
 				}
 
 				if streamInfo != nil {
@@ -182,4 +191,90 @@ dataLoop:
 	}
 
 	return jp.Error()
+}
+
+func ParseSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
+	reader := bufio.NewReader(f)
+	_, err := packet.Sync(reader)
+	if err != nil {
+		return fmt.Errorf("syncing with reader %w", err)
+	}
+	pat, err := psi.ReadPAT(reader)
+	if err != nil {
+		return fmt.Errorf("reading PAT %w", err)
+	}
+
+	var pmts []psi.PMT
+	pm := pat.ProgramMap()
+	for _, pid := range pm {
+		pmt, err := psi.ReadPMT(reader, pid)
+		if err != nil {
+			return fmt.Errorf("reading PMT %w", err)
+		}
+		pmts = append(pmts, pmt)
+	}
+
+	jp := &JsonPrinter{W: w, Indent: o.Indent}
+	scte35PIDs := make(map[int]bool)
+	for _, pmt := range pmts {
+		for _, es := range pmt.ElementaryStreams() {
+			if es.StreamType() == psi.PmtStreamTypeScte35 {
+				scte35PIDs[es.ElementaryPid()] = true
+				break
+			}
+		}
+	}
+
+	// Print SCTE35
+	for {
+		var pkt packet.Packet
+		if _, err := io.ReadFull(reader, pkt[:]); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			return fmt.Errorf("reading Packet %w", err)
+		}
+
+		currPID := packet.Pid(&pkt)
+		if scte35PIDs[currPID] {
+			pay, err := packet.Payload(&pkt)
+			if err != nil {
+				return fmt.Errorf("cannot get payload for packet on PID %d Error=%s\n", currPID, err)
+			}
+			msg, err := scte35.NewSCTE35(pay)
+			if err != nil {
+				return fmt.Errorf("cannot parse SCTE35 Error=%v\n", err)
+			}
+			scte35 := toSCTE35(uint16(currPID), msg)
+			jp.Print(scte35, o.ShowSCTE35)
+		}
+	}
+
+	return jp.Error()
+}
+
+func ParseInfoAndSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
+	var out1, out2 bytes.Buffer
+	_, err := CopyToAll(f, &out1, &out2)
+	ec := chain.New()
+	if err != nil {
+		ec.Add(errors.New("failed to copy input"))
+	}
+
+	f1 := strings.NewReader(out1.String())
+	infoErr := ParseInfo(ctx, w, f1, o)
+	f2 := strings.NewReader(out2.String())
+	scteErr := ParseSCTE35(ctx, w, f2, o)
+	if infoErr == nil && scteErr == nil {
+		return nil
+	}
+
+	ec.Add(infoErr)
+	ec.Add(scteErr)
+	return ec
+}
+
+func CopyToAll(rd io.Reader, wrs ...io.Writer) (int64, error) {
+	mwr := io.MultiWriter(wrs...)
+	return io.Copy(mwr, rd)
 }
