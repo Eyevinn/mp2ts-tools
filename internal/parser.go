@@ -13,7 +13,6 @@ import (
 	"github.com/Comcast/gots/v2/psi"
 	"github.com/Comcast/gots/v2/scte35"
 	"github.com/asticode/go-astits"
-	chain "github.com/g8rswimmer/error-chain"
 )
 
 func ParseAll(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
@@ -256,22 +255,22 @@ func ParseSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error
 func ParseInfoAndSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
 	var out1, out2 bytes.Buffer
 	_, err := CopyToAll(f, &out1, &out2)
-	ec := chain.New()
 	if err != nil {
-		ec.Add(errors.New("failed to copy input"))
+		return errors.New("failed to copy input stream")
 	}
-
 	f1 := strings.NewReader(out1.String())
 	infoErr := ParseInfo(ctx, w, f1, o)
-	f2 := strings.NewReader(out2.String())
-	scteErr := ParseSCTE35(ctx, w, f2, o)
-	if infoErr == nil && scteErr == nil {
-		return nil
+	if infoErr != nil {
+		return infoErr
 	}
 
-	ec.Add(infoErr)
-	ec.Add(scteErr)
-	return ec
+	f2 := strings.NewReader(out2.String())
+	scteErr := ParseSCTE35(ctx, w, f2, o)
+	if scteErr != nil {
+		return scteErr
+	}
+
+	return nil
 }
 
 func CopyToAll(rd io.Reader, wrs ...io.Writer) (int64, error) {
