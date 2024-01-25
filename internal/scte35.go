@@ -65,6 +65,9 @@ func toSpliceInsertCommand(spliceCommand scte35.SpliceInsertCommand) SpliceComma
 	spliceCmd.EventId = spliceCommand.EventID()
 	spliceCmd.Immediate = spliceCommand.SpliceImmediate()
 	spliceCmd.Out = spliceCommand.IsOut()
+	if spliceCommand.HasPTS() {
+		spliceCmd.PTS = uint64(spliceCommand.PTS())
+	}
 	if spliceCommand.HasDuration() {
 		spliceCmd.Duration = uint64(spliceCommand.Duration())
 	}
