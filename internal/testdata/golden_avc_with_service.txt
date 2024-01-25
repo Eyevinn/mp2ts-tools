@@ -1,4 +1,4 @@
 {"pid":256,"codec":"AVC","type":"video"}
 {"pid":257,"codec":"AAC","type":"audio"}
 {"pid":1001,"codec":"SCTE35","type":"cue"}
-{"pid":1001,"spliceCommand":{"type":"SpliceInsert","eventId":255,"pts":0,"duration":1800000,"outOfNetwork":true}}
+{"SDT":[{"serviceId":1,"descriptors":[{"serviceName":"Service01","providerName":"FFmpeg"}]}]}

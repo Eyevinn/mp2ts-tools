@@ -24,7 +24,7 @@ func TestParseFile(t *testing.T) {
 	fullOptionsWith35PicWithoutNALUSEI.ShowSEIDetails = false
 
 	parseInfoFunc := ParseInfo
-	parseInfoAndSCTE35Func := ParseInfoAndSCTE35
+	parseSCTE35Func := ParseSCTE35
 	parseAllFunc := ParseAll
 
 	cases := []struct {
@@ -36,7 +36,8 @@ func TestParseFile(t *testing.T) {
 	}{
 		{"avc", "testdata/avc_with_time.ts", Options{MaxNrPictures: 10, Indent: true, ShowStreamInfo: true, ShowPS: true, ShowStatistics: true}, "testdata/golden_avc.txt", parseAllFunc},
 		{"avc_without_ps", "testdata/avc_with_time.ts", Options{MaxNrPictures: 10, ShowStreamInfo: true}, "testdata/golden_avc_without_ps.txt", parseInfoFunc},
-		{"avc_with_scte35", "testdata/80s_with_ad.ts", Options{MaxNrPictures: 0, ShowStreamInfo: true, ShowService: true, ShowSCTE35: true}, "testdata/golden_avc_with_scte35.txt", parseInfoAndSCTE35Func},
+		{"avc_with_service", "testdata/80s_with_ad.ts", Options{MaxNrPictures: 0, ShowStreamInfo: true, ShowService: true}, "testdata/golden_avc_with_service.txt", parseInfoFunc},
+		{"avc_with_scte35", "testdata/80s_with_ad.ts", Options{MaxNrPictures: 0, ShowStreamInfo: true, ShowSCTE35: true}, "testdata/golden_avc_with_scte35.txt", parseSCTE35Func},
 		{"bbb_1s", "testdata/bbb_1s.ts", fullOptionsWith35Pic, "testdata/golden_bbb_1s.txt", parseAllFunc},
 		{"bbb_1s_indented", "testdata/bbb_1s.ts", fullOptionsWith2Pic, "testdata/golden_bbb_1s_indented.txt", parseAllFunc},
 		{"bbb_1s_no_nalu_no_sei", "testdata/bbb_1s.ts", fullOptionsWith35PicWithoutNALUSEI, "testdata/golden_bbb_1s_no_nalu(no_sei).txt", parseAllFunc},

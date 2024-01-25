@@ -11,17 +11,19 @@ type SCTE35Info struct {
 }
 
 type SpliceCommand struct {
-	Type     string `json:"type"`
-	EventId  uint32 `json:"eventId,omitempty"`
-	PTS      uint64 `json:"pts,omitempty"`
-	Duration uint64 `json:"duration,omitempty"`
+	Type      string `json:"type"`
+	EventId   uint32 `json:"eventId"`
+	PTS       uint64 `json:"pts"`
+	Duration  uint64 `json:"duration,omitempty"`
+	Out       bool   `json:"outOfNetwork,omitempty"`
+	Immediate bool   `json:"immediate,omitempty"`
 }
 
 type SegmentationDescriptor struct {
-	EventId   uint32 `json:"eventId"`
-	Type      string `json:"type"`
-	Direction string `json:"direction,omitempty"`
-	Duration  uint64 `json:"duration,omitempty"`
+	SegmentNumber uint8  `json:"segmentNumber"`
+	EventId       uint32 `json:"eventId"`
+	Type          string `json:"type"`
+	Duration      uint64 `json:"duration,omitempty"`
 }
 
 func toSCTE35(pid uint16, msg scte35.SCTE35) SCTE35Info {
@@ -49,9 +51,9 @@ func toSpliceCommand(spliceCommand scte35.SpliceCommand) SpliceCommand {
 
 func toSegmentationDescriptor(segdesc scte35.SegmentationDescriptor) SegmentationDescriptor {
 	segDesc := SegmentationDescriptor{}
-	segDesc.Direction = getSegDirection(segdesc)
 	segDesc.EventId = segdesc.EventID()
 	segDesc.Type = scte35.SegDescTypeNames[segdesc.TypeID()]
+	segDesc.SegmentNumber = segdesc.SegmentNumber()
 	if segdesc.HasDuration() {
 		segDesc.Duration = uint64(segdesc.Duration())
 	}
@@ -61,6 +63,8 @@ func toSegmentationDescriptor(segdesc scte35.SegmentationDescriptor) Segmentatio
 func toSpliceInsertCommand(spliceCommand scte35.SpliceInsertCommand) SpliceCommand {
 	spliceCmd := SpliceCommand{Type: getCommandType(spliceCommand)}
 	spliceCmd.EventId = spliceCommand.EventID()
+	spliceCmd.Immediate = spliceCommand.SpliceImmediate()
+	spliceCmd.Out = spliceCommand.IsOut()
 	if spliceCommand.HasDuration() {
 		spliceCmd.Duration = uint64(spliceCommand.Duration())
 	}
@@ -70,14 +74,4 @@ func toSpliceInsertCommand(spliceCommand scte35.SpliceInsertCommand) SpliceComma
 
 func getCommandType(spliceCommand scte35.SpliceCommand) string {
 	return scte35.SpliceCommandTypeNames[spliceCommand.CommandType()]
-}
-
-func getSegDirection(segdesc scte35.SegmentationDescriptor) string {
-	if segdesc.IsIn() {
-		return "In"
-	}
-	if segdesc.IsOut() {
-		return "Out"
-	}
-	return ""
 }

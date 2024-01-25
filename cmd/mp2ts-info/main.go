@@ -20,7 +20,7 @@ var usg = `Usage of %s:
 func parseOptions() internal.Options {
 	opts := internal.Options{ShowStreamInfo: true, Indent: true}
 	flag.BoolVar(&opts.ShowService, "service", false, "show service information")
-	flag.BoolVar(&opts.ShowSCTE35, "scte35", false, "show SCTE35 information")
+	flag.BoolVar(&opts.ShowSCTE35, "scte35", true, "show SCTE35 information")
 	flag.BoolVar(&opts.Indent, "indent", true, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
 
@@ -37,7 +37,20 @@ func parseOptions() internal.Options {
 }
 
 func parse(ctx context.Context, w io.Writer, f io.Reader, o internal.Options) error {
-	return internal.ParseInfoAndSCTE35(ctx, w, f, o)
+	// Parse either general information, or scte35 (by default)
+	if o.ShowService {
+		err := internal.ParseInfo(ctx, w, f, o)
+		if err != nil {
+			return err
+		}
+	} else if o.ShowSCTE35 {
+		err := internal.ParseSCTE35(ctx, w, f, o)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func main() {

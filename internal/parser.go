@@ -2,12 +2,9 @@ package internal
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/Comcast/gots/v2/packet"
 	"github.com/Comcast/gots/v2/psi"
@@ -217,9 +214,22 @@ func ParseSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error
 	scte35PIDs := make(map[int]bool)
 	for _, pmt := range pmts {
 		for _, es := range pmt.ElementaryStreams() {
-			if es.StreamType() == psi.PmtStreamTypeScte35 {
+			pid := uint16(es.ElementaryPid())
+			var streamInfo *ElementaryStreamInfo
+			switch es.StreamType() {
+			case psi.PmtStreamTypeMpeg4VideoH264:
+				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "AVC", Type: "video"}
+			case psi.PmtStreamTypeAac:
+				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "AAC", Type: "audio"}
+			case psi.PmtStreamTypeMpeg4VideoH265:
+				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "HEVC", Type: "video"}
+			case psi.PmtStreamTypeScte35:
+				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "SCTE35", Type: "cue"}
 				scte35PIDs[es.ElementaryPid()] = true
-				break
+			}
+
+			if streamInfo != nil {
+				jp.Print(streamInfo, o.ShowStreamInfo)
 			}
 		}
 	}
@@ -250,30 +260,4 @@ func ParseSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error
 	}
 
 	return jp.Error()
-}
-
-func ParseInfoAndSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
-	var out1, out2 bytes.Buffer
-	_, err := CopyToAll(f, &out1, &out2)
-	if err != nil {
-		return errors.New("failed to copy input stream")
-	}
-	f1 := strings.NewReader(out1.String())
-	infoErr := ParseInfo(ctx, w, f1, o)
-	if infoErr != nil {
-		return infoErr
-	}
-
-	f2 := strings.NewReader(out2.String())
-	scteErr := ParseSCTE35(ctx, w, f2, o)
-	if scteErr != nil {
-		return scteErr
-	}
-
-	return nil
-}
-
-func CopyToAll(rd io.Reader, wrs ...io.Writer) (int64, error) {
-	mwr := io.MultiWriter(wrs...)
-	return io.Copy(mwr, rd)
 }
