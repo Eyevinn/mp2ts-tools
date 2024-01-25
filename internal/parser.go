@@ -316,6 +316,9 @@ func FilterPids(ctx context.Context, w io.Writer, f io.Reader, o Options) error 
 
 	// Create and append to the new file
 	fo, err := os.OpenFile(o.OutputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("creating output file %w", err)
+	}
 	defer fo.Close()
 	pidsToKeep := ParsePidsFromString(o.PidsToKeep)
 	for {

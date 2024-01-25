@@ -20,7 +20,7 @@ Filter nothing and save the original packets if empty pids list is given (by def
 
 func parseOptions() internal.Options {
 	opts := internal.Options{ShowStreamInfo: true, Indent: true, FilterPids: true}
-	flag.StringVar(&opts.PidsToKeep, "keep", "", "pids to keep in the PMT")
+	flag.StringVar(&opts.PidsToKeep, "keep", "", "pids to keep in the PMT (split by space), e.g. \"256 257\"")
 	flag.StringVar(&opts.OutputFile, "output", "", "path of the output file")
 	flag.BoolVar(&opts.Indent, "indent", true, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
