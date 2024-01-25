@@ -21,6 +21,7 @@ type Options struct {
 	VerbosePSInfo  bool
 	ShowNALU       bool
 	ShowSEIDetails bool
+	ShowSCTE35     bool
 	ShowStatistics bool
 }
 
