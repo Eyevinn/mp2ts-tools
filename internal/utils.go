@@ -8,6 +8,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -23,6 +25,9 @@ type Options struct {
 	ShowSEIDetails bool
 	ShowSCTE35     bool
 	ShowStatistics bool
+	FilterPids     bool
+	PidsToKeep     string
+	OutputFile     string
 }
 
 func CreateFullOptions(max int) Options {
@@ -31,6 +36,19 @@ func CreateFullOptions(max int) Options {
 
 type OptionParseFunc func() Options
 type RunableFunc func(ctx context.Context, w io.Writer, f io.Reader, o Options) error
+
+func ParsePidsFromString(input string) []int {
+	words := strings.Fields(input)
+	var pids []int
+	for _, word := range words {
+		number, err := strconv.Atoi(word)
+		if err != nil {
+			continue
+		}
+		pids = append(pids, number)
+	}
+	return pids
+}
 
 func ParseParams(function OptionParseFunc) (o Options, inFile string) {
 	o = function()

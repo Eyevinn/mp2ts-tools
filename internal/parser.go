@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/Comcast/gots/v2/packet"
 	"github.com/Comcast/gots/v2/psi"
@@ -260,4 +261,91 @@ func ParseSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error
 	}
 
 	return jp.Error()
+}
+
+func FilterPids(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
+	reader := bufio.NewReader(f)
+	_, err := packet.Sync(reader)
+	if err != nil {
+		return fmt.Errorf("syncing with reader %w", err)
+	}
+	pat, err := psi.ReadPAT(reader)
+	if err != nil {
+		return fmt.Errorf("reading PAT %w", err)
+	}
+
+	var pmts []psi.PMT
+	pm := pat.ProgramMap()
+	for _, pid := range pm {
+		pmt, err := psi.ReadPMT(reader, pid)
+		if err != nil {
+			return fmt.Errorf("reading PMT %w", err)
+		}
+		pmts = append(pmts, pmt)
+	}
+
+	// Print stream info
+	jp := &JsonPrinter{W: w, Indent: o.Indent}
+	for _, pmt := range pmts {
+		for _, es := range pmt.ElementaryStreams() {
+			pid := uint16(es.ElementaryPid())
+			var streamInfo *ElementaryStreamInfo
+			switch es.StreamType() {
+			case psi.PmtStreamTypeMpeg4VideoH264:
+				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "AVC", Type: "video"}
+			case psi.PmtStreamTypeAac:
+				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "AAC", Type: "audio"}
+			case psi.PmtStreamTypeMpeg4VideoH265:
+				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "HEVC", Type: "video"}
+			case psi.PmtStreamTypeScte35:
+				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "SCTE35", Type: "cue"}
+			}
+
+			if streamInfo != nil {
+				jp.Print(streamInfo, o.ShowStreamInfo)
+			}
+		}
+	}
+
+	// Remove the output file if it exists
+	if _, err := os.Stat(o.OutputFile); err == nil {
+		if err := os.Remove(o.OutputFile); err != nil {
+			return fmt.Errorf("removing existing file %w", err)
+		}
+	}
+
+	// Create and append to the new file
+	fo, err := os.OpenFile(o.OutputFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	defer fo.Close()
+	pidsToKeep := ParsePidsFromString(o.PidsToKeep)
+	for {
+		var pkt packet.Packet
+		if _, err := io.ReadFull(reader, pkt[:]); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			return fmt.Errorf("reading Packet %w", err)
+		}
+
+		isPMT, err := psi.IsPMT(&pkt, pat)
+		if err != nil {
+			return fmt.Errorf("parsing the PID of packet %w", err)
+		}
+		pkts := []*packet.Packet{&pkt}
+		if isPMT {
+			pkts, err = psi.FilterPMTPacketsToPids(pkts, pidsToKeep)
+			if err != nil {
+				return fmt.Errorf("filtering pids %w", err)
+			}
+		}
+
+		if len(pkts) >= 1 {
+			p := pkts[0]
+			if _, err := fo.Write((*p)[:]); err != nil {
+				return fmt.Errorf("writing to file %w", err)
+			}
+		}
+	}
+
+	return nil
 }
