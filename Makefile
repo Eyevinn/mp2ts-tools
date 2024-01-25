@@ -2,13 +2,13 @@
 all: test check coverage build
 
 .PHONY: build
-build: ts-info
+build: mp2ts-info mp2ts-nallister mp2ts-pslister
 
 .PHONY: prepare
 prepare:
 	go mod tidy
 
-ts-info:
+mp2ts-info mp2ts-nallister mp2ts-pslister:
 	go build -ldflags "-X github.com/Eyevinn/mp2ts-tools/internal.commitVersion=$$(git describe --tags HEAD) -X github.com/Eyevinn/mp2ts-tools/internal.commitDate=$$(git log -1 --format=%ct)" -o out/$@ ./cmd/$@/main.go
 
 .PHONY: test
@@ -18,9 +18,7 @@ test: prepare
 .PHONY: coverage
 coverage:
 	# Ignore (allow) packages without any tests
-	set -o pipefail
 	go test ./... -coverprofile coverage.out
-	set +o pipefail
 	go tool cover -html=coverage.out -o coverage.html
 	go tool cover -func coverage.out -o coverage.txt
 	tail -1 coverage.txt
