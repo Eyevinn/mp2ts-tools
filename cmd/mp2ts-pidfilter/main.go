@@ -14,14 +14,15 @@ import (
 
 var usg = `Usage of %s:
 
-%s filter out some irrelevant pids from the PMT.
-Filter nothing and save the original packets if empty pids list is given (by default).
+%s filters out some chosen pids from the ts packet.
+Drop nothing and list all PIDs if empty pids list is specified (by default).
+However, PAT(0) and PMT must not be droped.
 `
 
 func parseOptions() internal.Options {
 	opts := internal.Options{ShowStreamInfo: true, Indent: true, FilterPids: true}
-	flag.StringVar(&opts.PidsToKeep, "keep", "", "pids to keep in the PMT (split by space), e.g. \"256 257\"")
-	flag.StringVar(&opts.OutputFile, "output", "", "path of the output file")
+	flag.StringVar(&opts.PidsToDrop, "drop", "", "pids to drop in the PMT (split by space), e.g. \"256 257\"")
+	flag.StringVar(&opts.OutPutTo, "output", "", "save the TS packets into the given file (filepath) or stdout (-)")
 	flag.BoolVar(&opts.Indent, "indent", true, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
 
@@ -37,8 +38,25 @@ func parseOptions() internal.Options {
 	return opts
 }
 
-func filter(ctx context.Context, w io.Writer, f io.Reader, o internal.Options) error {
-	return internal.FilterPids(ctx, w, f, o)
+func filter(ctx context.Context, stdout io.Writer, f io.Reader, o internal.Options) error {
+	outPutToFile := o.OutPutTo != "-"
+	var fileout io.Writer
+	if outPutToFile {
+		// Remove existing output file
+		if err := internal.RemoveExistingFile(o.OutPutTo); err != nil {
+			return err
+		}
+		file, err := internal.OpenFileAndAppend(o.OutPutTo)
+		if err != nil {
+			return err
+		}
+		fileout = file
+		defer file.Close()
+	} else {
+		fileout = stdout
+	}
+
+	return internal.FilterPids(ctx, stdout, fileout, f, o, outPutToFile)
 }
 
 func main() {
