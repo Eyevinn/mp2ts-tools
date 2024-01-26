@@ -43,7 +43,7 @@ func filter(ctx context.Context, stdout io.Writer, f io.Reader, o internal.Optio
 	var fileout io.Writer
 	if outPutToFile {
 		// Remove existing output file
-		if err := internal.RemoveExistingFile(o.OutPutTo); err != nil {
+		if err := internal.RemoveFileIfExists(o.OutPutTo); err != nil {
 			return err
 		}
 		file, err := internal.OpenFileAndAppend(o.OutPutTo)

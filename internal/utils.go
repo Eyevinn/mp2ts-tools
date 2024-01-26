@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -90,14 +91,14 @@ func WritePacket(pkt *packet.Packet, w io.Writer) error {
 	return err
 }
 
-func RemoveExistingFile(file string) error {
+func RemoveFileIfExists(file string) error {
 	// Remove the file if it exists
-	_, err := os.Stat(file)
-	if err != nil {
-		return err
+	if _, err := os.Stat(file); errors.Is(err, os.ErrNotExist) {
+		// file does not exist
+		return nil
 	}
 
-	err = os.Remove(file)
+	err := os.Remove(file)
 	if err != nil {
 		return err
 	}
@@ -166,15 +167,33 @@ func ParsePatcketToPAT(pkt *packet.Packet) (pat psi.PAT, e error) {
 	return nil, fmt.Errorf("unable to parse packet to PAT")
 }
 
-func FilterPidsFromPidList(pidsToDrop []int, availablePids []int) []int {
-	pidsToKeep := []int{}
-	for _, pid := range availablePids {
-		if !slices.Contains(pidsToDrop, pid) {
-			pidsToKeep = append(pidsToKeep, pid)
+func IsTwoSetsOverlapping(s1 []int, s2 []int) bool {
+	intersection := GetIntersectionOfTwoSets(s1, s2)
+	return len(intersection) != 0
+}
+
+// Return a set that contains those elements of s1 that are NOT in s2
+func GetIntersectionOfTwoSets(s1 []int, s2 []int) []int {
+	intersection := []int{}
+	for _, e := range s1 {
+		if slices.Contains(s2, e) {
+			intersection = append(intersection, e)
 		}
 	}
 
-	return pidsToKeep
+	return intersection
+}
+
+// Return a set that contains those elements of s1 that are NOT in s2
+func GetDifferenceOfTwoSets(s1 []int, s2 []int) []int {
+	difference := []int{}
+	for _, e := range s1 {
+		if !slices.Contains(s2, e) {
+			difference = append(difference, e)
+		}
+	}
+
+	return difference
 }
 
 func ParsePidsFromString(input string) []int {

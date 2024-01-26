@@ -256,7 +256,7 @@ func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.R
 	}
 
 	jp := &JsonPrinter{W: stdout, Indent: o.Indent}
-	statistics := PidFilterStatistics{PidsToDrop: pidsToDrop, TotalPackets: 0, FilteredPackets: 0}
+	statistics := PidFilterStatistics{PidsToDrop: pidsToDrop, TotalPackets: 0, FilteredPackets: 0, PacketsBeforePAT: 0}
 
 	var pkt packet.Packet
 	var pat psi.PAT
@@ -276,10 +276,11 @@ func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.R
 			foundPAT = true
 		}
 
+		// Count PAT packet and non-PMT packets
 		statistics.TotalPackets = statistics.TotalPackets + 1
 		if !foundPAT {
 			// packets before PAT
-			statistics.FilteredPackets = statistics.FilteredPackets + 1
+			statistics.PacketsBeforePAT = statistics.PacketsBeforePAT + 1
 			continue
 		}
 
@@ -306,8 +307,10 @@ func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.R
 				if err != nil {
 					return err
 				}
+				// Count PMT packets
+				statistics.TotalPackets = statistics.TotalPackets + uint32(len(packets))
 
-				// 1. Print stream info
+				// 1. Print stream info only once
 				if o.ShowStreamInfo && !hasShownStreamInfo {
 					for _, es := range pmt.ElementaryStreams() {
 						streamInfo := ParseElementaryStreamInfo(es)
@@ -318,22 +321,22 @@ func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.R
 					hasShownStreamInfo = true
 				}
 
-				// 2. Filter pids
+				// 2. Drop pids if exist
+				isFilteringOutPids := IsTwoSetsOverlapping(pmt.Pids(), pidsToDrop)
 				pkts := []*packet.Packet{}
 				for i := range packets {
 					pkts = append(pkts, &packets[i])
 				}
-				pidsToKeep := FilterPidsFromPidList(pidsToDrop, pmt.Pids())
-				pkts, err = psi.FilterPMTPacketsToPids(pkts, pidsToKeep)
-				if err != nil {
-					return fmt.Errorf("filtering pids %w", err)
+				if isFilteringOutPids {
+					pidsToKeep := GetDifferenceOfTwoSets(pmt.Pids(), pidsToDrop)
+					pkts, err = psi.FilterPMTPacketsToPids(pkts, pidsToKeep)
+					if err != nil {
+						return fmt.Errorf("filtering pids %w", err)
+					}
+
+					statistics.FilteredPackets = statistics.FilteredPackets + uint32(len(pkts))
 				}
 
-				numFilterred := len(packets) - len(pkts)
-				// Note: numFilterred might be zero even we we have removed the pids from PMT
-
-				statistics.TotalPackets = statistics.TotalPackets + uint32(len(packets))
-				statistics.FilteredPackets = statistics.FilteredPackets + uint32(numFilterred)
 				// 3. Save PMT packets
 				for _, p := range pkts {
 					if err = WritePacket(p, fileout); err != nil {
@@ -346,7 +349,7 @@ func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.R
 			continue
 		}
 
-		// Save other packets
+		// Save non-PAT/PMT packets
 		if err = WritePacket(&pkt, fileout); err != nil {
 			return err
 		}
