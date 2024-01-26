@@ -167,12 +167,13 @@ func ParsePatcketToPAT(pkt *packet.Packet) (pat psi.PAT, e error) {
 	return nil, fmt.Errorf("unable to parse packet to PAT")
 }
 
+// Check if two sets contain same elements
 func IsTwoSetsOverlapping(s1 []int, s2 []int) bool {
 	intersection := GetIntersectionOfTwoSets(s1, s2)
 	return len(intersection) != 0
 }
 
-// Return a set that contains those elements of s1 that are NOT in s2
+// Return a set that contains those elements of s1 that are also in s2
 func GetIntersectionOfTwoSets(s1 []int, s2 []int) []int {
 	intersection := []int{}
 	for _, e := range s1 {
