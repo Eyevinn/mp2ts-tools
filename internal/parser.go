@@ -5,12 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"slices"
 
 	"github.com/Comcast/gots/v2/packet"
 	"github.com/Comcast/gots/v2/psi"
 	"github.com/Comcast/gots/v2/scte35"
 	"github.com/asticode/go-astits"
+	slices "golang.org/x/exp/slices"
 )
 
 func ParseAll(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
@@ -298,6 +298,10 @@ func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.R
 			// Handle PMT packet(s)
 			pm := pat.ProgramMap()
 			for _, pid := range pm {
+				if slices.Contains(pidsToDrop, pid) {
+					return fmt.Errorf("filtering out PMT is not allowed")
+				}
+
 				packets, pmt, err := ReadPMTPackets(reader, pid)
 				if err != nil {
 					return err

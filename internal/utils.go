@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,6 +16,7 @@ import (
 	"github.com/Comcast/gots/v2/packet"
 	"github.com/Comcast/gots/v2/psi"
 	"github.com/asticode/go-astits"
+	slices "golang.org/x/exp/slices"
 )
 
 type Options struct {
