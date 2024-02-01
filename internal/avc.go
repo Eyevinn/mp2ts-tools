@@ -12,7 +12,7 @@ type AvcPS struct {
 	spss       map[uint32]*avc.SPS
 	ppss       map[uint32]*avc.PPS
 	spsnalu    []byte
-	ppsnalus   [][]byte
+	ppsnalus   map[uint32][]byte
 	Statistics StreamStatistics
 }
 
@@ -31,7 +31,7 @@ func (a *AvcPS) setSPS(nalu []byte) error {
 	if a.spss == nil {
 		a.spss = make(map[uint32]*avc.SPS, 1)
 		a.ppss = make(map[uint32]*avc.PPS, 1)
-		a.ppsnalus = make([][]byte, 1)
+		a.ppsnalus = make(map[uint32][]byte)
 	}
 	sps, err := avc.ParseSPSNALUnit(nalu, true)
 	if err != nil {

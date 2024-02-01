@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/Comcast/gots/v2 v2.2.1
-	github.com/Eyevinn/mp4ff v0.41.1-0.20240123164056-bbd4656aecc0
+	github.com/Eyevinn/mp4ff v0.42.0
 	github.com/asticode/go-astits v1.13.0
 	github.com/stretchr/testify v1.8.4
 )

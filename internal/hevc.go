@@ -14,7 +14,7 @@ type HevcPS struct {
 	ppss       map[uint32]*hevc.PPS
 	vpsnalu    []byte
 	spsnalu    []byte
-	ppsnalus   [][]byte
+	ppsnalus   map[uint32][]byte
 	Statistics StreamStatistics
 }
 
@@ -22,7 +22,7 @@ func (a *HevcPS) setSPS(nalu []byte) error {
 	if a.spss == nil {
 		a.spss = make(map[uint32]*hevc.SPS, 1)
 		a.ppss = make(map[uint32]*hevc.PPS, 1)
-		a.ppsnalus = make([][]byte, 1)
+		a.ppsnalus = make(map[uint32][]byte, 1)
 	}
 	sps, err := hevc.ParseSPSNALUnit(nalu)
 	if err != nil {
