@@ -243,7 +243,7 @@ func ParseSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error
 	return jp.Error()
 }
 
-func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.Reader, o Options, outPutToFile bool) error {
+func FilterPids(ctx context.Context, textWriter io.Writer, tsWriter io.Writer, f io.Reader, o Options) error {
 	pidsToDrop := ParsePidsFromString(o.PidsToDrop)
 	if slices.Contains(pidsToDrop, 0) {
 		return fmt.Errorf("filtering out PAT is not allowed")
@@ -255,7 +255,7 @@ func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.R
 		return fmt.Errorf("syncing with reader %w", err)
 	}
 
-	jp := &JsonPrinter{W: stdout, Indent: o.Indent}
+	jp := &JsonPrinter{W: textWriter, Indent: o.Indent}
 	statistics := PidFilterStatistics{PidsToDrop: pidsToDrop, TotalPackets: 0, FilteredPackets: 0, PacketsBeforePAT: 0}
 
 	var pkt packet.Packet
@@ -286,13 +286,13 @@ func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.R
 
 		if packet.IsPat(&pkt) {
 			// Parse PAT packet
-			pat, err = ParsePatcketToPAT(&pkt)
+			pat, err = ParsePacketToPAT(&pkt)
 			if err != nil {
 				return err
 			}
 
 			// Save PAT packet
-			if err = WritePacket(&pkt, fileout); err != nil {
+			if err = WritePacket(&pkt, tsWriter); err != nil {
 				return err
 			}
 
@@ -315,20 +315,20 @@ func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.R
 					for _, es := range pmt.ElementaryStreams() {
 						streamInfo := ParseElementaryStreamInfo(es)
 						if streamInfo != nil {
-							jp.Print(streamInfo, outPutToFile)
+							jp.Print(streamInfo, true)
 						}
 					}
 					hasShownStreamInfo = true
 				}
 
 				// 2. Drop pids if exist
-				isFilteringOutPids := IsTwoSetsOverlapping(pmt.Pids(), pidsToDrop)
+				isFilteringOutPids := IsTwoSlicesOverlapping(pmt.Pids(), pidsToDrop)
 				pkts := []*packet.Packet{}
 				for i := range packets {
 					pkts = append(pkts, &packets[i])
 				}
 				if isFilteringOutPids {
-					pidsToKeep := GetDifferenceOfTwoSets(pmt.Pids(), pidsToDrop)
+					pidsToKeep := GetDifferenceOfTwoSlices(pmt.Pids(), pidsToDrop)
 					pkts, err = psi.FilterPMTPacketsToPids(pkts, pidsToKeep)
 					if err != nil {
 						return fmt.Errorf("filtering pids %w", err)
@@ -339,7 +339,7 @@ func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.R
 
 				// 3. Save PMT packets
 				for _, p := range pkts {
-					if err = WritePacket(p, fileout); err != nil {
+					if err = WritePacket(p, tsWriter); err != nil {
 						return err
 					}
 				}
@@ -350,11 +350,11 @@ func FilterPids(ctx context.Context, stdout io.Writer, fileout io.Writer, f io.R
 		}
 
 		// Save non-PAT/PMT packets
-		if err = WritePacket(&pkt, fileout); err != nil {
+		if err = WritePacket(&pkt, tsWriter); err != nil {
 			return err
 		}
 	}
 
-	jp.PrintFilter(statistics, outPutToFile)
+	jp.PrintFilter(statistics, true)
 	return nil
 }

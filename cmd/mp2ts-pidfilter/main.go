@@ -16,7 +16,7 @@ var usg = `Usage of %s:
 
 %s filters out some chosen pids from the ts packet.
 Drop nothing and list all PIDs if empty pids list is specified (by default).
-However, PAT(0) and PMT must not be droped.
+However, PAT(0) and PMT must not be dropped.
 `
 
 func parseOptions() internal.Options {
@@ -38,9 +38,11 @@ func parseOptions() internal.Options {
 	return opts
 }
 
-func filter(ctx context.Context, stdout io.Writer, f io.Reader, o internal.Options) error {
+func filter(ctx context.Context, w io.Writer, f io.Reader, o internal.Options) error {
 	outPutToFile := o.OutPutTo != "-"
-	var fileout io.Writer
+	var textOutput io.Writer
+	var tsOutput io.Writer
+	// If we output to ts files, print analysis to stdout
 	if outPutToFile {
 		// Remove existing output file
 		if err := internal.RemoveFileIfExists(o.OutPutTo); err != nil {
@@ -50,13 +52,15 @@ func filter(ctx context.Context, stdout io.Writer, f io.Reader, o internal.Optio
 		if err != nil {
 			return err
 		}
-		fileout = file
+		tsOutput = file
+		textOutput = w
 		defer file.Close()
-	} else {
-		fileout = stdout
+	} else { // If we output to stdout, print analysis to stderr
+		tsOutput = w
+		textOutput = os.Stderr
 	}
 
-	return internal.FilterPids(ctx, stdout, fileout, f, o, outPutToFile)
+	return internal.FilterPids(ctx, textOutput, tsOutput, f, o)
 }
 
 func main() {

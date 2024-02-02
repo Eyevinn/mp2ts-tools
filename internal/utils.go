@@ -149,7 +149,7 @@ func ParseElementaryStreamInfo(es psi.PmtElementaryStream) *ElementaryStreamInfo
 	return streamInfo
 }
 
-func ParsePatcketToPAT(pkt *packet.Packet) (pat psi.PAT, e error) {
+func ParsePacketToPAT(pkt *packet.Packet) (pat psi.PAT, e error) {
 	if packet.IsPat(pkt) {
 		pay, err := packet.Payload(pkt)
 		if err != nil {
@@ -168,13 +168,13 @@ func ParsePatcketToPAT(pkt *packet.Packet) (pat psi.PAT, e error) {
 }
 
 // Check if two sets contain same elements
-func IsTwoSetsOverlapping(s1 []int, s2 []int) bool {
-	intersection := GetIntersectionOfTwoSets(s1, s2)
+func IsTwoSlicesOverlapping(s1 []int, s2 []int) bool {
+	intersection := GetIntersectionOfTwoSlices(s1, s2)
 	return len(intersection) != 0
 }
 
 // Return a set that contains those elements of s1 that are also in s2
-func GetIntersectionOfTwoSets(s1 []int, s2 []int) []int {
+func GetIntersectionOfTwoSlices(s1 []int, s2 []int) []int {
 	intersection := []int{}
 	for _, e := range s1 {
 		if slices.Contains(s2, e) {
@@ -186,7 +186,7 @@ func GetIntersectionOfTwoSets(s1 []int, s2 []int) []int {
 }
 
 // Return a set that contains those elements of s1 that are NOT in s2
-func GetDifferenceOfTwoSets(s1 []int, s2 []int) []int {
+func GetDifferenceOfTwoSlices(s1 []int, s2 []int) []int {
 	difference := []int{}
 	for _, e := range s1 {
 		if !slices.Contains(s2, e) {
