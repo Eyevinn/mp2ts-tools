@@ -7,6 +7,7 @@ require (
 	github.com/Eyevinn/mp4ff v0.42.0
 	github.com/asticode/go-astits v1.13.0
 	github.com/stretchr/testify v1.8.4
+	golang.org/x/exp v0.0.0-20240119083558-1b970713d09a
 )
 
 require (

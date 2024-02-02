@@ -10,6 +10,7 @@ import (
 	"github.com/Comcast/gots/v2/psi"
 	"github.com/Comcast/gots/v2/scte35"
 	"github.com/asticode/go-astits"
+	slices "golang.org/x/exp/slices"
 )
 
 func ParseAll(ctx context.Context, w io.Writer, f io.Reader, o Options) error {
@@ -150,18 +151,7 @@ dataLoop:
 		if pmtPID < 0 && d.PMT != nil {
 			// Loop through elementary streams
 			for _, es := range d.PMT.ElementaryStreams {
-				var streamInfo *ElementaryStreamInfo
-				switch es.StreamType {
-				case astits.StreamTypeH264Video:
-					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AVC", Type: "video"}
-				case astits.StreamTypeAACAudio:
-					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AAC", Type: "audio"}
-				case astits.StreamTypeH265Video:
-					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
-				case astits.StreamTypeSCTE35:
-					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "SCTE35", Type: "cue"}
-				}
-
+				streamInfo := ParseAstitsElementaryStreamInfo(es)
 				if streamInfo != nil {
 					jp.Print(streamInfo, o.ShowStreamInfo)
 				}
@@ -214,21 +204,12 @@ func ParseSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error
 	scte35PIDs := make(map[int]bool)
 	for _, pmt := range pmts {
 		for _, es := range pmt.ElementaryStreams() {
-			pid := uint16(es.ElementaryPid())
-			var streamInfo *ElementaryStreamInfo
-			switch es.StreamType() {
-			case psi.PmtStreamTypeMpeg4VideoH264:
-				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "AVC", Type: "video"}
-			case psi.PmtStreamTypeAac:
-				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "AAC", Type: "audio"}
-			case psi.PmtStreamTypeMpeg4VideoH265:
-				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "HEVC", Type: "video"}
-			case psi.PmtStreamTypeScte35:
-				streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "SCTE35", Type: "cue"}
-				scte35PIDs[es.ElementaryPid()] = true
-			}
-
+			streamInfo := ParseElementaryStreamInfo(es)
 			if streamInfo != nil {
+				if streamInfo.Codec == "SCTE35" {
+					scte35PIDs[es.ElementaryPid()] = true
+				}
+
 				jp.Print(streamInfo, o.ShowStreamInfo)
 			}
 		}
@@ -260,4 +241,120 @@ func ParseSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error
 	}
 
 	return jp.Error()
+}
+
+func FilterPids(ctx context.Context, textWriter io.Writer, tsWriter io.Writer, f io.Reader, o Options) error {
+	pidsToDrop := ParsePidsFromString(o.PidsToDrop)
+	if slices.Contains(pidsToDrop, 0) {
+		return fmt.Errorf("filtering out PAT is not allowed")
+	}
+
+	reader := bufio.NewReader(f)
+	_, err := packet.Sync(reader)
+	if err != nil {
+		return fmt.Errorf("syncing with reader %w", err)
+	}
+
+	jp := &JsonPrinter{W: textWriter, Indent: o.Indent}
+	statistics := PidFilterStatistics{PidsToDrop: pidsToDrop, TotalPackets: 0, FilteredPackets: 0, PacketsBeforePAT: 0}
+
+	var pkt packet.Packet
+	var pat psi.PAT
+	foundPAT := false
+	hasShownStreamInfo := false
+	// Skip packets until PAT
+	for {
+		// Read packet
+		if _, err := io.ReadFull(reader, pkt[:]); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			return fmt.Errorf("reading Packet %w", err)
+		}
+		if packet.IsPat(&pkt) {
+			// Found first PAT packet
+			foundPAT = true
+		}
+
+		// Count PAT packet and non-PMT packets
+		statistics.TotalPackets = statistics.TotalPackets + 1
+		if !foundPAT {
+			// packets before PAT
+			statistics.PacketsBeforePAT = statistics.PacketsBeforePAT + 1
+			continue
+		}
+
+		if packet.IsPat(&pkt) {
+			// Parse PAT packet
+			pat, err = ParsePacketToPAT(&pkt)
+			if err != nil {
+				return err
+			}
+
+			// Save PAT packet
+			if err = WritePacket(&pkt, tsWriter); err != nil {
+				return err
+			}
+
+			// Handle PMT packet(s)
+			pm := pat.ProgramMap()
+			for _, pid := range pm {
+				if slices.Contains(pidsToDrop, pid) {
+					return fmt.Errorf("filtering out PMT is not allowed")
+				}
+
+				packets, pmt, err := ReadPMTPackets(reader, pid)
+				if err != nil {
+					return err
+				}
+				// Count PMT packets
+				statistics.TotalPackets = statistics.TotalPackets + uint32(len(packets))
+
+				// 1. Print stream info only once
+				if o.ShowStreamInfo && !hasShownStreamInfo {
+					for _, es := range pmt.ElementaryStreams() {
+						streamInfo := ParseElementaryStreamInfo(es)
+						if streamInfo != nil {
+							jp.Print(streamInfo, true)
+						}
+					}
+					hasShownStreamInfo = true
+				}
+
+				// 2. Drop pids if exist
+				isFilteringOutPids := IsTwoSlicesOverlapping(pmt.Pids(), pidsToDrop)
+				pkts := []*packet.Packet{}
+				for i := range packets {
+					pkts = append(pkts, &packets[i])
+				}
+				if isFilteringOutPids {
+					pidsToKeep := GetDifferenceOfTwoSlices(pmt.Pids(), pidsToDrop)
+					pkts, err = psi.FilterPMTPacketsToPids(pkts, pidsToKeep)
+					if err != nil {
+						return fmt.Errorf("filtering pids %w", err)
+					}
+
+					statistics.FilteredPackets = statistics.FilteredPackets + uint32(len(pkts))
+				}
+
+				// 3. Save PMT packets
+				for _, p := range pkts {
+					if err = WritePacket(p, tsWriter); err != nil {
+						return err
+					}
+				}
+			}
+
+			// Move on to next packet
+			continue
+		}
+
+		// Save non-PAT/PMT packets
+		if err = WritePacket(&pkt, tsWriter); err != nil {
+			return err
+		}
+	}
+
+	jp.PrintFilter(statistics, true)
+	return nil
 }

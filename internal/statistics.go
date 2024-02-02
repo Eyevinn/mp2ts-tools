@@ -1,5 +1,13 @@
 package internal
 
+type PidFilterStatistics struct {
+	PidsToDrop       []int   `json:"pidsToDrop"`
+	TotalPackets     uint32  `json:"total"`
+	FilteredPackets  uint32  `json:"filtered"`
+	PacketsBeforePAT uint32  `json:"packetBeforePAT"`
+	Percentage       float32 `json:"percentage"`
+}
+
 type StreamStatistics struct {
 	Type       string  `json:"streamType"`
 	Pid        uint16  `json:"pid"`
@@ -15,6 +23,17 @@ type StreamStatistics struct {
 	IDRGOPDuration int64   `json:"IDRGoPDuration,omitempty"`
 	// Errors
 	Errors []string `json:"errors,omitempty"`
+}
+
+func (p *JsonPrinter) PrintFilter(s PidFilterStatistics, show bool) {
+	if s.TotalPackets == 0 {
+		s.Percentage = 0
+	} else {
+		s.Percentage = (float32(s.PacketsBeforePAT) + float32(s.FilteredPackets)) / float32(s.TotalPackets)
+	}
+
+	// print statistics
+	p.Print(s, show)
 }
 
 func (p *JsonPrinter) PrintStatistics(s StreamStatistics, show bool) {
