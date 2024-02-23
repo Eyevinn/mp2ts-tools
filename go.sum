@@ -1,7 +1,7 @@
 github.com/Comcast/gots/v2 v2.2.1 h1:LU/SRg7p2KQqVkNqInV7I4MOQKAqvWQP/PSSLtygP2s=
 github.com/Comcast/gots/v2 v2.2.1/go.mod h1:firJ11on3eUiGHAhbY5cZNqG0OqhQ1+nSZHfsEEzVVU=
-github.com/Eyevinn/mp4ff v0.42.0 h1:I85b/EDTkP77GsoBL8nRV6sfFKZhAXoP6oJHU8fv6kM=
-github.com/Eyevinn/mp4ff v0.42.0/go.mod h1:w/6GSa5ghZ1VavzJK6McQ2/flx8mKtcrKDr11SsEweA=
+github.com/Eyevinn/mp4ff v0.42.1-0.20240221161741-c9bb3c122204 h1:hxaiwOKm+ooV4lH/UIfgBzi8/CGj3pRIYXnVU3uQQpc=
+github.com/Eyevinn/mp4ff v0.42.1-0.20240221161741-c9bb3c122204/go.mod h1:w/6GSa5ghZ1VavzJK6McQ2/flx8mKtcrKDr11SsEweA=
 github.com/asticode/go-astikit v0.30.0/go.mod h1:h4ly7idim1tNhaVkdVBeXQZEE3L0xblP7fCWbgwipF0=
 github.com/asticode/go-astikit v0.42.0 h1:pnir/2KLUSr0527Tv908iAH6EGYYrYta132vvjXsH5w=
 github.com/asticode/go-astikit v0.42.0/go.mod h1:h4ly7idim1tNhaVkdVBeXQZEE3L0xblP7fCWbgwipF0=
