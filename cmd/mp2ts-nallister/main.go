@@ -14,13 +14,15 @@ import (
 
 var usg = `Usage of %s:
 
-%s generates a list of nalus with information about timestamps, rai, SEI etc.
+%s generates a list of AVC/HEVC nalus with information about timestamps, rai, SEI etc.
+It can further be used to generate a list of SMPTE-2038 data.
 `
 
 func parseOptions() internal.Options {
 	opts := internal.Options{ShowStreamInfo: true, ShowService: false, ShowPS: false, ShowNALU: true, ShowSEIDetails: false, ShowStatistics: true}
 	flag.IntVar(&opts.MaxNrPictures, "max", 0, "max nr pictures to parse")
 	flag.BoolVar(&opts.ShowSEIDetails, "sei", false, "print detailed sei message information")
+	flag.BoolVar(&opts.ShowSMPTE2038, "smpte2038", false, "print details about SMPTE-2038 data")
 	flag.BoolVar(&opts.Indent, "indent", false, "indent JSON output")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
 

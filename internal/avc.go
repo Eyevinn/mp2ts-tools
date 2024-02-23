@@ -156,6 +156,9 @@ func ParseAVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o Options) (
 		})
 	}
 
+	if jp == nil {
+		return ps, nil
+	}
 	if firstPS {
 		for nr := range ps.spss {
 			jp.PrintPS(pid, "SPS", nr, ps.spsnalu, ps.spss[nr], o.VerbosePSInfo, o.ShowPS)

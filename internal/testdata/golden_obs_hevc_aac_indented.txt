@@ -53,12 +53,7 @@
     },
     {
       "type": "SEI_39",
-      "len": 31,
-      "data": [
-        {
-          "msg": "SEIUserDataUnregisteredType (5)"
-        }
-      ]
+      "len": 31
     },
     {
       "type": "RAP_IDR_20",

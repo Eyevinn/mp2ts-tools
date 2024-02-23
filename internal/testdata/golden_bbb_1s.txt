@@ -2,7 +2,7 @@
 {"pid":257,"codec":"AAC","type":"audio"}
 {"pid":256,"parameterSet":"SPS","nr":0,"hex":"6764001facd9405005bb011000000300100000030300f1831960","length":26}
 {"pid":256,"parameterSet":"PPS","nr":0,"hex":"68ebecb22c","length":5}
-{"pid":256,"rai":true,"pts":133500,"dts":126000,"imgType":"[I]","nalus":[{"type":"AUD_9","len":2},{"type":"SEI_6","len":701,"data":[{"msg":"SEIUserDataUnregisteredType (5)","payload":{"UUID":"3EXpvebZSLeWLNgg2SPu7w=="}}]},{"type":"SPS_7","len":26},{"type":"PPS_8","len":5},{"type":"IDR_5","len":209}]}
+{"pid":256,"rai":true,"pts":133500,"dts":126000,"imgType":"[I]","nalus":[{"type":"AUD_9","len":2},{"type":"SEI_6","len":701,"data":[{"msg":"SEIUserDataUnregisteredType (5)"}]},{"type":"SPS_7","len":26},{"type":"PPS_8","len":5},{"type":"IDR_5","len":209}]}
 {"pid":256,"rai":false,"pts":144750,"dts":129750,"imgType":"[P]","nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":34}]}
 {"pid":256,"rai":false,"pts":137250,"dts":133500,"imgType":"[B]","nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":32}]}
 {"pid":256,"rai":false,"pts":141000,"dts":137250,"imgType":"[B]","nalus":[{"type":"AUD_9","len":2},{"type":"NonIDR_1","len":32}]}

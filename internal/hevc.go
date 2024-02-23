@@ -141,6 +141,9 @@ func ParseHEVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o Options)
 			Data: nil,
 		})
 	}
+	if jp == nil {
+		return ps, nil
+	}
 
 	if firstPS {
 		jp.PrintPS(pid, "VPS", 0, ps.vpsnalu, nil, o.VerbosePSInfo, o.ShowPS)

@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Nothing yet
+### Added
+
+- SMPTE-2038 data option to mp2ts-tools
 
 ## [0.2.1] - 2024-01-25
 

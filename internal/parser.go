@@ -51,20 +51,9 @@ dataLoop:
 		if pmtPID < 0 && d.PMT != nil {
 			// Loop through elementary streams
 			for _, es := range d.PMT.ElementaryStreams {
-				var streamInfo *ElementaryStreamInfo
-				switch es.StreamType {
-				case astits.StreamTypeH264Video:
-					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AVC", Type: "video"}
-					esKinds[es.ElementaryPID] = "AVC"
-				case astits.StreamTypeAACAudio:
-					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "AAC", Type: "audio"}
-					esKinds[es.ElementaryPID] = "AAC"
-				case astits.StreamTypeH265Video:
-					streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
-					esKinds[es.ElementaryPID] = "HEVC"
-				}
-
+				streamInfo := ParseAstitsElementaryStreamInfo(es)
 				if streamInfo != nil {
+					esKinds[es.ElementaryPID] = streamInfo.Codec
 					jp.Print(streamInfo, o.ShowStreamInfo)
 				}
 			}
@@ -107,6 +96,10 @@ dataLoop:
 			}
 			nrPics++
 			statistics[d.PID] = &hevcPS.Statistics
+		case "SMPTE-2038":
+			if o.ShowSMPTE2038 {
+				ParseSMPTE2038(jp, d, o)
+			}
 		default:
 			// Skip unknown elementary streams
 			continue

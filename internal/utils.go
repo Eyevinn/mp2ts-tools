@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -30,6 +31,7 @@ type Options struct {
 	VerbosePSInfo  bool
 	ShowNALU       bool
 	ShowSEIDetails bool
+	ShowSMPTE2038  bool
 	ShowSCTE35     bool
 	ShowStatistics bool
 	FilterPids     bool
@@ -38,8 +40,13 @@ type Options struct {
 }
 
 func CreateFullOptions(max int) Options {
-	return Options{MaxNrPictures: max, ShowStreamInfo: true, ShowService: true, ShowPS: true, ShowNALU: true, ShowSEIDetails: true, ShowStatistics: true}
+	return Options{MaxNrPictures: max, ShowStreamInfo: true, ShowService: true, ShowPS: true, ShowNALU: true, ShowSEIDetails: true, ShowSMPTE2038: true, ShowStatistics: true}
 }
+
+const (
+	ANC_REGISTERED_IDENTIFIER = 0x56414E43
+	ANC_DESCRIPTOR_TAG        = 0xC4
+)
 
 type OptionParseFunc func() Options
 type RunableFunc func(ctx context.Context, w io.Writer, f io.Reader, o Options) error
@@ -127,6 +134,36 @@ func ParseAstitsElementaryStreamInfo(es *astits.PMTElementaryStream) *Elementary
 		streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
 	case astits.StreamTypeSCTE35:
 		streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "SCTE35", Type: "cue"}
+	case astits.StreamTypePrivateData:
+		streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "PrivateData", Type: "data"}
+	default:
+		return nil
+	}
+	for _, d := range es.ElementaryStreamDescriptors {
+		switch d.Tag {
+		case astits.DescriptorTagISO639LanguageAndAudioType:
+			l := d.ISO639LanguageAndAudioType
+			fmt.Printf("Language: %s\n", l.Language)
+		case astits.DescriptorTagDataStreamAlignment:
+			a := d.DataStreamAlignment
+			log.Printf("PID %d: Descriptor Data stream alignment: %d\n", es.ElementaryPID, a.Type)
+		case astits.DescriptorTagRegistration:
+			r := d.Registration
+			switch r.FormatIdentifier {
+			case ANC_REGISTERED_IDENTIFIER:
+				streamInfo.Codec = "SMPTE-2038"
+				streamInfo.Type = "ANC"
+			}
+		case ANC_DESCRIPTOR_TAG:
+			if streamInfo.Type != "ANC" {
+				log.Printf("PID %d: bad combination of descriptor 0xc4 and no preceding ANC", es.ElementaryPID)
+				continue
+			}
+			u := d.UserDefined
+			log.Printf("PID %d: Got ancillary descriptor with data: %q\n", es.ElementaryPID, hex.EncodeToString(u))
+		default:
+			// Nothing
+		}
 	}
 
 	return streamInfo
