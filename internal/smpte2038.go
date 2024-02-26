@@ -17,11 +17,31 @@ type SMPTE291Identifier struct {
 }
 
 var SMPTE291Map = map[SMPTE291Identifier]string{
-	{0x41, 0x7}: "ANSI/SCTE 104 messages",
-	{0x41, 0x5}: "AFD and Bar Data",
-	{0x41, 0x8}: "DVB/SCTE VBI data",
-	{0x61, 0x1}: "EIA 708B Data mapping into VANC space",
-	{0x61, 0x2}: "EIA 608 Data mapping into VANC space",
+	{0x41, 0x05}: "AFD and Bar Data",
+	{0x41, 0x06}: "Pan and Scan Information",
+	{0x41, 0x07}: "ANSI/SCTE 104 messages",
+	{0x41, 0x08}: "DVB/SCTE VBI data",
+	{0x43, 0x01}: "Inter Station Control Packet Data",
+	{0x43, 0x02}: "OP-47 SDP - Subtitling Data",
+	{0x43, 0x03}: "OP-47 Multi Packet ANC Data",
+	{0x45, 0x01}: "Audio Metadata (Single Program)",
+	{0x45, 0x02}: "Audio Metadata Ch 01/02",
+	{0x45, 0x03}: "Audio Metadata Ch 03/04",
+	{0x45, 0x04}: "Audio Metadata Ch 05/06",
+	{0x45, 0x05}: "Audio Metadata Ch 07/08",
+	{0x45, 0x06}: "Audio Metadata Ch 09/10",
+	{0x45, 0x07}: "Audio Metadata Ch 11/12",
+	{0x45, 0x08}: "Audio Metadata Ch 13/14",
+	{0x45, 0x09}: "Audio Metadata Ch 15/16",
+	{0x50, 0x01}: "WSS - Wide Screen Signaling",
+	{0x50, 0x30}: "User Defined",
+	{0x50, 0x49}: "User Defined",
+	{0x60, 0x60}: "ATC - Ancillary Timecode",
+	{0x61, 0x01}: "EIA 708B Data mapping into VANC space",
+	{0x61, 0x02}: "EIA 608 Data mapping into VANC space",
+	{0x62, 0x01}: "DTV Program Description",
+	{0x62, 0x02}: "DTV Data Broadcast",
+	{0x62, 0x03}: "VBI Data",
 }
 
 type smpte2038Data struct {
