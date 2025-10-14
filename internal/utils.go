@@ -37,6 +37,7 @@ type Options struct {
 	FilterPids     bool
 	PidsToDrop     string
 	OutPutTo       string
+	WaitForPS      bool // Wait for parameter sets (SPS/PPS) before printing NAL units
 }
 
 func CreateFullOptions(max int) Options {

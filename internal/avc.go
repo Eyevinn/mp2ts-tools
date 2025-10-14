@@ -27,6 +27,10 @@ func (a *AvcPS) getSPS() *avc.SPS {
 	return nil
 }
 
+func (a *AvcPS) hasPS() bool {
+	return len(a.spss) > 0 && len(a.ppss) > 0
+}
+
 func (a *AvcPS) setSPS(nalu []byte) error {
 	if a.spss == nil {
 		a.spss = make(map[uint32]*avc.SPS, 1)
@@ -166,6 +170,11 @@ func ParseAVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o Options) (
 		for nr := range ps.ppss {
 			jp.PrintPS(pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], o.VerbosePSInfo, o.ShowPS)
 		}
+	}
+
+	// Skip printing if WaitForPS is enabled and we don't have parameter sets yet
+	if o.WaitForPS && !ps.hasPS() {
+		return ps, nil
 	}
 
 	jp.Print(nfd, o.ShowNALU)

@@ -34,6 +34,7 @@
   "rai": true,
   "pts": 1920,
   "dts": 1920,
+  "imgType": "[I]",
   "nalus": [
     {
       "type": "AUD_35",
@@ -71,6 +72,7 @@
   "rai": false,
   "pts": 4920,
   "dts": 4920,
+  "imgType": "[P]",
   "nalus": [
     {
       "type": "AUD_35",
