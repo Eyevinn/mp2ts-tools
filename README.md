@@ -11,18 +11,72 @@ MPEG-2 Transport Stream is a very wide spread format for transporting media.
 This repo provides some tools to facilitate analysis and extraction of
 data from MPEG-2 TS streams.
 
-## mp2ts-info
+## Tools
 
-`mp2ts-info` is a tool that parses a TS file, or a stream on stdin, and prints
-information about the video streams in JSON format.
+### mp2ts-info
 
-## mp2ts-pslister
+`mp2ts-info` parses a TS file or stream on stdin and prints information about the video streams in JSON format. Use this for quick stream analysis and metadata extraction.
 
-`mp2ts-pslister` is a tool that shows information about SPS, PPS (and VPS for HEVC) in a TS file.
+**Example:**
+```sh
+mp2ts-info video.ts
+```
 
-## mp2ts-nallister
+### mp2ts-nallister
 
-`mp2ts-nallister` is a tool that shows information about PTS/DTS, PicTiming SEI, and NAL units.
+`mp2ts-nallister` shows detailed information about NAL units including:
+- PTS/DTS timestamps
+- Picture types (I, P, B frames) for both AVC and HEVC
+- PicTiming SEI messages
+- RAI (Random Access Indicator) markers
+- SMPTE-2038 ancillary data
+
+**Options:**
+- `-waitps` - Wait for parameter sets (SPS/PPS) before printing NAL units
+- `-sei` - Print detailed SEI message information
+- `-smpte2038` - Print SMPTE-2038 ancillary data details
+- `-max N` - Limit output to N pictures
+
+**Example:**
+```sh
+mp2ts-nallister -waitps -max 10 video.ts
+```
+
+### mp2ts-pslister
+
+`mp2ts-pslister` shows information about parameter sets (SPS, PPS, and VPS for HEVC) in a TS file. Useful for debugging video codec configurations.
+
+**Example:**
+```sh
+mp2ts-pslister video.ts
+```
+
+### mp2ts-extract
+
+`mp2ts-extract` extracts elementary video streams (PES payloads) from TS files to raw Annex B byte stream format. By default, it waits for parameter sets (VPS/SPS/PPS) before starting extraction to ensure a clean, decodable stream.
+
+**Features:**
+- Supports both AVC (H.264) and HEVC (H.265) streams
+- Auto-selects first video PID or extract specific PID
+- Outputs Annex B byte stream format
+- Waits for parameter sets by default
+
+**Options:**
+- `-output <file>` - Output file path (required, use `-` for stdout)
+- `-pid N` - PID to extract (0 = auto-select first video PID)
+- `-waitps` - Wait for parameter sets before extraction (default: true)
+
+**Examples:**
+```sh
+# Extract first video stream to file
+mp2ts-extract -output video.264 input.ts
+
+# Extract specific PID
+mp2ts-extract -pid 512 -output video.hevc input.ts
+
+# Output to stdout
+mp2ts-extract -output - input.ts > video.264
+```
 
 ## How to run
 
