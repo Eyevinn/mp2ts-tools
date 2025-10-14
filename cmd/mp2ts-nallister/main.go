@@ -24,6 +24,7 @@ func parseOptions() internal.Options {
 	flag.BoolVar(&opts.ShowSEIDetails, "sei", false, "print detailed sei message information")
 	flag.BoolVar(&opts.ShowSMPTE2038, "smpte2038", false, "print details about SMPTE-2038 data")
 	flag.BoolVar(&opts.Indent, "indent", false, "indent JSON output")
+	flag.BoolVar(&opts.WaitForPS, "waitps", false, "wait for parameter sets (SPS/PPS) before printing NAL units")
 	flag.BoolVar(&opts.Version, "version", false, "print version")
 
 	flag.Usage = func() {

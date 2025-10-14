@@ -18,6 +18,10 @@ type HevcPS struct {
 	Statistics StreamStatistics
 }
 
+func (a *HevcPS) hasPS() bool {
+	return len(a.spss) > 0 && len(a.ppss) > 0
+}
+
 func (a *HevcPS) setSPS(nalu []byte) error {
 	if a.spss == nil {
 		a.spss = make(map[uint32]*hevc.SPS, 1)
@@ -135,6 +139,13 @@ func ParseHEVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o Options)
 		case hevc.NALU_IDR_W_RADL, hevc.NALU_IDR_N_LP:
 			ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
 		}
+		// Parse slice type for video NAL units
+		if hevc.IsVideoNaluType(naluType) {
+			sliceHeader, err := hevc.ParseSliceHeader(nalu, ps.spss, ps.ppss)
+			if err == nil {
+				nfd.ImgType = fmt.Sprintf("[%s]", sliceHeader.SliceType)
+			}
+		}
 		nfd.NALUS = append(nfd.NALUS, NaluData{
 			Type: naluType.String(),
 			Len:  len(nalu),
@@ -153,6 +164,11 @@ func ParseHEVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o Options)
 		for nr := range ps.ppss {
 			jp.PrintPS(pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], o.VerbosePSInfo, o.ShowPS)
 		}
+	}
+
+	// Skip printing if WaitForPS is enabled and we don't have parameter sets yet
+	if o.WaitForPS && !ps.hasPS() {
+		return ps, nil
 	}
 
 	jp.Print(nfd, o.ShowNALU)
