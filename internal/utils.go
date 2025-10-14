@@ -38,6 +38,7 @@ type Options struct {
 	PidsToDrop     string
 	OutPutTo       string
 	WaitForPS      bool // Wait for parameter sets (SPS/PPS) before printing NAL units
+	ExtractPID     int  // PID to extract for elementary stream extraction (0 = first video PID)
 }
 
 func CreateFullOptions(max int) Options {

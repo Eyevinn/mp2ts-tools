@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New `mp2ts-extract` tool to extract elementary video streams from TS files
+  - Automatically waits for parameter sets (VPS/SPS/PPS) before extraction
+  - Supports both AVC and HEVC streams
+  - Can extract specific PID or auto-select first video stream
 - Picture type (I, P, B) information for HEVC streams in mp2ts-nallister
 - `-waitps` option to mp2ts-nallister to wait for parameter sets before printing NAL units
 - SMPTE-2038 data option to mp2ts-tools
