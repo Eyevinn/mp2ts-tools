@@ -58,7 +58,7 @@ func extract(ctx context.Context, w io.Writer, f io.Reader, o internal.Options) 
 		}
 		esOutput = file
 		textOutput = w
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 	} else { // If we output to stdout, print info to stderr
 		esOutput = w
 		textOutput = os.Stderr

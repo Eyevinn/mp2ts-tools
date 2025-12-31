@@ -93,9 +93,10 @@ dataLoop:
 				hasPPS := false
 				for _, nalu := range nalus {
 					naluType := avc.GetNaluType(nalu[0])
-					if naluType == avc.NALU_SPS {
+					switch naluType {
+					case avc.NALU_SPS:
 						hasSPS = true
-					} else if naluType == avc.NALU_PPS {
+					case avc.NALU_PPS:
 						hasPPS = true
 					}
 				}
@@ -115,9 +116,10 @@ dataLoop:
 				hasPPS := false
 				for _, nalu := range nalus {
 					naluType := hevc.GetNaluType(nalu[0])
-					if naluType == hevc.NALU_SPS {
+					switch naluType {
+					case hevc.NALU_SPS:
 						hasSPS = true
-					} else if naluType == hevc.NALU_PPS {
+					case hevc.NALU_PPS:
 						hasPPS = true
 					}
 				}

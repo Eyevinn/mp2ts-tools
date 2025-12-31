@@ -54,7 +54,7 @@ func filter(ctx context.Context, w io.Writer, f io.Reader, o internal.Options) e
 		}
 		tsOutput = file
 		textOutput = w
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 	} else { // If we output to stdout, print analysis to stderr
 		tsOutput = w
 		textOutput = os.Stderr
