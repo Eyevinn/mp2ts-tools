@@ -78,6 +78,23 @@ mp2ts-extract -pid 512 -output video.hevc input.ts
 mp2ts-extract -output - input.ts > video.264
 ```
 
+### mp2ts-timeshift
+
+`mp2ts-timeshift` shifts all PTS/DTS/PCR_base values in a transport stream by a specified offset. The main use-case is to generate TS files with timestamp wrap-around for testing purposes.
+
+**Options:**
+- `-offset N` - Timestamp offset in 90kHz units (can be negative)
+- `-output <file>` - Output file path (default: `-` for stdout)
+
+**Examples:**
+```sh
+# Shift by 2^33 to cause wrap-around
+mp2ts-timeshift -offset 8589934592 -output output.ts input.ts
+
+# Shift back by 100 seconds
+mp2ts-timeshift -offset -9000000 input.ts > output.ts
+```
+
 ## How to run
 
 You can download and install any tool directly using

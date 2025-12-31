@@ -284,7 +284,7 @@ func Execute(w io.Writer, o Options, inFile string, function RunableFunc) error 
 			log.Fatal(err)
 		}
 		f = fh
-		defer fh.Close()
+		defer func() { _ = fh.Close() }()
 	}
 
 	err := function(ctx, w, f, o)

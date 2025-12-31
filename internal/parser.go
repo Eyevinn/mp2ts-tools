@@ -222,11 +222,11 @@ func ParseSCTE35(ctx context.Context, w io.Writer, f io.Reader, o Options) error
 		if scte35PIDs[currPID] {
 			pay, err := packet.Payload(&pkt)
 			if err != nil {
-				return fmt.Errorf("cannot get payload for packet on PID %d Error=%s\n", currPID, err)
+				return fmt.Errorf("cannot get payload for packet on PID %d Error=%s", currPID, err)
 			}
 			msg, err := scte35.NewSCTE35(pay)
 			if err != nil {
-				return fmt.Errorf("cannot parse SCTE35 Error=%v\n", err)
+				return fmt.Errorf("cannot parse SCTE35 Error=%v", err)
 			}
 			scte35 := toSCTE35(uint16(currPID), msg)
 			jp.Print(scte35, o.ShowSCTE35)
