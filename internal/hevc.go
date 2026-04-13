@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	"github.com/Eyevinn/mp4ff/avc"
@@ -15,6 +16,9 @@ type HevcPS struct {
 	vpsnalu    []byte
 	spsnalu    []byte
 	ppsnalus   map[uint32][]byte
+	lastVPSHex string
+	lastSPSHex string
+	lastPPSHex map[uint32]string
 	Statistics StreamStatistics
 }
 
@@ -27,6 +31,7 @@ func (a *HevcPS) setSPS(nalu []byte) error {
 		a.spss = make(map[uint32]*hevc.SPS, 1)
 		a.ppss = make(map[uint32]*hevc.PPS, 1)
 		a.ppsnalus = make(map[uint32][]byte, 1)
+		a.lastPPSHex = make(map[uint32]string)
 	}
 	sps, err := hevc.ParseSPSNALUnit(nalu)
 	if err != nil {
@@ -157,12 +162,24 @@ func ParseHEVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o Options)
 	}
 
 	if firstPS {
-		jp.PrintPS(pid, "VPS", 0, ps.vpsnalu, nil, o.VerbosePSInfo, o.ShowPS)
-		for nr := range ps.spss {
-			jp.PrintPS(pid, "SPS", nr, ps.spsnalu, ps.spss[nr], o.VerbosePSInfo, o.ShowPS)
+		vpsHex := hex.EncodeToString(ps.vpsnalu)
+		if vpsHex != ps.lastVPSHex {
+			ps.lastVPSHex = vpsHex
+			jp.PrintPS(pid, "VPS", 0, ps.vpsnalu, nil, o.VerbosePSInfo, o.ShowPS)
+		}
+		spsHex := hex.EncodeToString(ps.spsnalu)
+		if spsHex != ps.lastSPSHex {
+			ps.lastSPSHex = spsHex
+			for nr := range ps.spss {
+				jp.PrintPS(pid, "SPS", nr, ps.spsnalu, ps.spss[nr], o.VerbosePSInfo, o.ShowPS)
+			}
 		}
 		for nr := range ps.ppss {
-			jp.PrintPS(pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], o.VerbosePSInfo, o.ShowPS)
+			ppsHex := hex.EncodeToString(ps.ppsnalus[nr])
+			if ppsHex != ps.lastPPSHex[nr] {
+				ps.lastPPSHex[nr] = ppsHex
+				jp.PrintPS(pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], o.VerbosePSInfo, o.ShowPS)
+			}
 		}
 	}
 

@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	"github.com/Eyevinn/mp4ff/avc"
@@ -13,6 +14,8 @@ type AvcPS struct {
 	ppss       map[uint32]*avc.PPS
 	spsnalu    []byte
 	ppsnalus   map[uint32][]byte
+	lastSPSHex string
+	lastPPSHex map[uint32]string
 	Statistics StreamStatistics
 }
 
@@ -36,6 +39,7 @@ func (a *AvcPS) setSPS(nalu []byte) error {
 		a.spss = make(map[uint32]*avc.SPS, 1)
 		a.ppss = make(map[uint32]*avc.PPS, 1)
 		a.ppsnalus = make(map[uint32][]byte)
+		a.lastPPSHex = make(map[uint32]string)
 	}
 	sps, err := avc.ParseSPSNALUnit(nalu, true)
 	if err != nil {
@@ -130,7 +134,7 @@ func ParseAVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o Options) (
 					if o.ShowSEIDetails && sps != nil {
 						parts = append(parts, SeiOut{
 							Msg:     t.String(),
-							Payload: pt,
+							Payload: picTimingAvcToOut(pt),
 						})
 					} else {
 						parts = append(parts, SeiOut{Msg: t.String()})
@@ -164,11 +168,19 @@ func ParseAVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o Options) (
 		return ps, nil
 	}
 	if firstPS {
-		for nr := range ps.spss {
-			jp.PrintPS(pid, "SPS", nr, ps.spsnalu, ps.spss[nr], o.VerbosePSInfo, o.ShowPS)
+		spsHex := hex.EncodeToString(ps.spsnalu)
+		if spsHex != ps.lastSPSHex {
+			ps.lastSPSHex = spsHex
+			for nr := range ps.spss {
+				jp.PrintPS(pid, "SPS", nr, ps.spsnalu, ps.spss[nr], o.VerbosePSInfo, o.ShowPS)
+			}
 		}
 		for nr := range ps.ppss {
-			jp.PrintPS(pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], o.VerbosePSInfo, o.ShowPS)
+			ppsHex := hex.EncodeToString(ps.ppsnalus[nr])
+			if ppsHex != ps.lastPPSHex[nr] {
+				ps.lastPPSHex[nr] = ppsHex
+				jp.PrintPS(pid, "PPS", nr, ps.ppsnalus[nr], ps.ppss[nr], o.VerbosePSInfo, o.ShowPS)
+			}
 		}
 	}
 
@@ -179,4 +191,35 @@ func ParseAVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o Options) (
 
 	jp.Print(nfd, o.ShowNALU)
 	return ps, jp.Error()
+}
+
+// picTimingAvcToOut converts a PicTimingAvcSEI to a richer output struct
+// that exposes all clock timestamp fields hidden by MarshalJSON.
+func picTimingAvcToOut(pt *sei.PicTimingAvcSEI) PicTimingAvcOut {
+	out := PicTimingAvcOut{
+		PictStruct: pt.PictStruct,
+		Clocks:     make([]ClockTSAvcOut, 0, len(pt.Clocks)),
+	}
+	if pt.CbpDbpDelay != nil {
+		out.CpbRemovalDelay = &pt.CbpDbpDelay.CpbRemovalDelay
+		out.DpbOutputDelay = &pt.CbpDbpDelay.DpbOutputDelay
+	}
+	for _, c := range pt.Clocks {
+		co := ClockTSAvcOut{
+			ClockTimeStampFlag: c.ClockTimeStampFlag,
+		}
+		if c.ClockTimeStampFlag {
+			co.CtType = &c.CtType
+			co.NuitFieldBasedFlag = &c.NuitFieldBasedFlag
+			co.CountingType = &c.CountingType
+			co.FullTimeStampFlag = &c.FullTimeStampFlag
+			co.DiscontinuityFlag = &c.DiscontinuityFlag
+			co.CntDroppedFlag = &c.CntDroppedFlag
+			co.NFrames = &c.NFrames
+			co.Time = fmt.Sprintf("%02d:%02d:%02d:%02d", c.Hours, c.Minutes, c.Seconds, c.NFrames)
+			co.TimeOffset = &c.TimeOffsetValue
+		}
+		out.Clocks = append(out.Clocks, co)
+	}
+	return out
 }
