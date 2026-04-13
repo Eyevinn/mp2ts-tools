@@ -33,9 +33,6 @@
 {"pid":256,"rai":false,"pts":82920,"dts":82920,"imgType":"[P]","nalus":[{"type":"AUD_35","len":3},{"type":"NonRAP_Trail_1","len":153}]}
 {"pid":256,"rai":false,"pts":85920,"dts":85920,"imgType":"[P]","nalus":[{"type":"AUD_35","len":3},{"type":"NonRAP_Trail_1","len":471}]}
 {"pid":256,"rai":false,"pts":88920,"dts":88920,"imgType":"[P]","nalus":[{"type":"AUD_35","len":3},{"type":"NonRAP_Trail_1","len":352}]}
-{"pid":256,"parameterSet":"VPS","nr":0,"hex":"40010c01ffff016000000300b00000030000030078170240","length":24}
-{"pid":256,"parameterSet":"SPS","nr":0,"hex":"420101016000000300b00000030000030078a005020171f2e205ee45914bff2e7f13fa9a8080808040","length":41}
-{"pid":256,"parameterSet":"PPS","nr":0,"hex":"4401c072f05324","length":7}
 {"pid":256,"rai":true,"pts":91920,"dts":91920,"imgType":"[I]","nalus":[{"type":"AUD_35","len":3},{"type":"VPS_32","len":24},{"type":"SPS_33","len":41},{"type":"PPS_34","len":7},{"type":"RAP_IDR_20","len":24298}]}
 {"pid":256,"rai":false,"pts":94920,"dts":94920,"imgType":"[P]","nalus":[{"type":"AUD_35","len":3},{"type":"NonRAP_Trail_1","len":402}]}
 {"pid":256,"rai":false,"pts":97920,"dts":97920,"imgType":"[P]","nalus":[{"type":"AUD_35","len":3},{"type":"NonRAP_Trail_1","len":400}]}

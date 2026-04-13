@@ -27,7 +27,7 @@ mp2ts-info video.ts
 `mp2ts-nallister` shows detailed information about NAL units including:
 - PTS/DTS timestamps
 - Picture types (I, P, B frames) for both AVC and HEVC
-- PicTiming SEI messages
+- PicTiming SEI messages with detailed clock timestamp fields
 - RAI (Random Access Indicator) markers
 - SMPTE-2038 ancillary data
 
@@ -44,7 +44,7 @@ mp2ts-nallister -waitps -max 10 video.ts
 
 ### mp2ts-pslister
 
-`mp2ts-pslister` shows information about parameter sets (SPS, PPS, and VPS for HEVC) in a TS file. Useful for debugging video codec configurations.
+`mp2ts-pslister` shows verbose information about parameter sets (SPS, PPS, and VPS for HEVC) in a TS file. Only prints parameter sets when they change, avoiding duplicate output for unchanged sets. Useful for debugging video codec configurations.
 
 **Example:**
 ```sh
