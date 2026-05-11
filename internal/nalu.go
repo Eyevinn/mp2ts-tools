@@ -6,6 +6,8 @@ type NaluFrameData struct {
 	PTS     int64      `json:"pts"`
 	DTS     int64      `json:"dts,omitempty"`
 	ImgType string     `json:"imgType,omitempty"`
+	POC     *int       `json:"poc,omitempty"`
+	QP      *int       `json:"qp,omitempty"`
 	NALUS   []NaluData `json:"nalus,omitempty"`
 }
 

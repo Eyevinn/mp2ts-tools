@@ -152,9 +152,29 @@ func ParseAVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *AvcPS, o Options) (
 			if naluType == avc.NALU_IDR {
 				ps.Statistics.IDRPTS = append(ps.Statistics.IDRPTS, pts.Base)
 			}
-			sliceType, err := avc.GetSliceTypeFromNALU(nalu)
-			if err == nil {
-				nfd.ImgType = fmt.Sprintf("[%s]", sliceType)
+			if ps.hasPS() {
+				if sh, err := avc.ParseSliceHeader(nalu, ps.spss, ps.ppss); err == nil {
+					sliceType := sh.SliceType
+					if sliceType >= 5 {
+						sliceType -= 5
+					}
+					if nfd.ImgType == "" {
+						nfd.ImgType = fmt.Sprintf("[%s]", sliceType)
+					}
+					if sh.FirstMBInSlice == 0 && nfd.POC == nil {
+						pps := ps.ppss[sh.PicParamID]
+						poc := int(sh.PicOrderCntLsb)
+						qp := 26 + pps.PicInitQpMinus26 + int(sh.SliceQPDelta)
+						nfd.POC = &poc
+						nfd.QP = &qp
+					}
+				} else if sliceType, err := avc.GetSliceTypeFromNALU(nalu); err == nil {
+					nfd.ImgType = fmt.Sprintf("[%s]", sliceType)
+				}
+			} else {
+				if sliceType, err := avc.GetSliceTypeFromNALU(nalu); err == nil {
+					nfd.ImgType = fmt.Sprintf("[%s]", sliceType)
+				}
 			}
 		}
 		nfd.NALUS = append(nfd.NALUS, NaluData{

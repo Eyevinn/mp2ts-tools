@@ -148,7 +148,17 @@ func ParseHEVCPES(jp *JsonPrinter, d *astits.DemuxerData, ps *HevcPS, o Options)
 		if hevc.IsVideoNaluType(naluType) {
 			sliceHeader, err := hevc.ParseSliceHeader(nalu, ps.spss, ps.ppss)
 			if err == nil {
-				nfd.ImgType = fmt.Sprintf("[%s]", sliceHeader.SliceType)
+				if nfd.ImgType == "" {
+					nfd.ImgType = fmt.Sprintf("[%s]", sliceHeader.SliceType)
+				}
+				if sliceHeader.FirstSliceSegmentInPicFlag && nfd.POC == nil {
+					if pps, ok := ps.ppss[sliceHeader.PicParameterSetId]; ok {
+						poc := int(sliceHeader.PicOrderCntLsb)
+						qp := 26 + int(pps.InitQpMinus26) + sliceHeader.QpDelta
+						nfd.POC = &poc
+						nfd.QP = &qp
+					}
+				}
 			}
 		}
 		nfd.NALUS = append(nfd.NALUS, NaluData{
