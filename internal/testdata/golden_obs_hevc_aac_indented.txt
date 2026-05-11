@@ -35,6 +35,8 @@
   "pts": 1920,
   "dts": 1920,
   "imgType": "[I]",
+  "poc": 0,
+  "qp": 29,
   "nalus": [
     {
       "type": "AUD_35",
@@ -73,6 +75,8 @@
   "pts": 4920,
   "dts": 4920,
   "imgType": "[P]",
+  "poc": 1,
+  "qp": 32,
   "nalus": [
     {
       "type": "AUD_35",

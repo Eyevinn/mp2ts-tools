@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- mp2ts-nallister now prints per-picture POC (`pic_order_cnt_lsb`) and slice QP (initial SliceQPY) for AVC and HEVC, parsed from the first slice (segment) of each picture
+
 ### Changed
 
 - mp2ts-pslister now always shows verbose parameter set info (removed `-ps` flag)
