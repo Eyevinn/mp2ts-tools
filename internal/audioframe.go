@@ -34,6 +34,8 @@ func newAudioFramer(c Codec) AudioFramer {
 		return NewADTSFramer()
 	case CODEC_MP2:
 		return NewMP2Framer()
+	case CODEC_AC3:
+		return NewAC3Framer()
 	default:
 		return nil
 	}
