@@ -15,11 +15,12 @@ import (
 // per wrap (with a per-wrap timestamp offset) yields a seamless constant-rate
 // stream. Timestamps are baked for wrap 0; PCR is linear across the segment.
 type LoopSegment struct {
-	Data         []byte
-	NumPackets   int
-	LoopDurTicks int64
-	VideoPID     int
-	PCRPid       int
+	Data          []byte
+	NumPackets    int
+	LoopDurTicks  int64
+	VideoPID      int
+	PCRPid        int
+	AudioStartPTS map[int]int64 // audio pid -> first audio frame PTS of the loop
 }
 
 // nullPacket returns a standard MPEG-TS null/stuffing packet (PID 8191).
@@ -83,6 +84,17 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	}
 	endByte := int(plan.EndPktNr)
 
+	// Include a couple of spare audio frames past the loop end so the per-wrap
+	// drift controller always has the boundary-crossing frame available.
+	audioVeEnd := make(map[int]int64)
+	for _, a := range plan.Audio {
+		slack := int64(0)
+		if a.FrameDurTicks > 0 {
+			slack = 2 * a.FrameDurTicks
+		}
+		audioVeEnd[a.PID] = AddPTS(Ve, slack)
+	}
+
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -128,16 +140,17 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 		case pid == vpid:
 			keep = pktNr < endByte
 		case audioPIDs[pid]:
+			veEnd := audioVeEnd[pid]
 			if pkt.PayloadUnitStartIndicator() {
 				if p := GetPTS(&pkt); p >= 0 {
 					curAudioPTS[pid] = p
-					if SignedPTSDiff(p, Ve) >= 0 {
+					if SignedPTSDiff(p, veEnd) >= 0 {
 						audioPast[pid] = true
 					}
 				}
 			}
 			cur := curAudioPTS[pid]
-			keep = SignedPTSDiff(cur, Vs) >= 0 && SignedPTSDiff(cur, Ve) < 0
+			keep = SignedPTSDiff(cur, Vs) >= 0 && SignedPTSDiff(cur, veEnd) < 0
 		default:
 			keep = pktNr < endByte // PAT/PMT/pass-through PIDs
 		}
@@ -195,12 +208,20 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	// Regenerate a linear PCR across the segment spanning exactly LoopDurTicks.
 	stampLinearPCR(data, plan.LoopDurTicks, n)
 
+	audioStart := make(map[int]int64)
+	for _, a := range plan.Audio {
+		if a.StartPTS >= 0 {
+			audioStart[a.PID] = a.StartPTS
+		}
+	}
+
 	return &LoopSegment{
-		Data:         data,
-		NumPackets:   n,
-		LoopDurTicks: plan.LoopDurTicks,
-		VideoPID:     vpid,
-		PCRPid:       pcrPid,
+		Data:          data,
+		NumPackets:    n,
+		LoopDurTicks:  plan.LoopDurTicks,
+		VideoPID:      vpid,
+		PCRPid:        pcrPid,
+		AudioStartPTS: audioStart,
 	}, nil
 }
 

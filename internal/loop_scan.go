@@ -99,12 +99,12 @@ func (s *scanTrack) HandlePES(p *PESData, last bool) error {
 			StartPktNr: p.StartPktNr,
 			PayloadLen: p.PayloadLength,
 		})
-		// Frame-accurate audio parsing (AAC for now). Setting p.AlignOffset lets
-		// ElStream carry a straddling frame into the next PES.
-		if s.codec == CODEC_AAC {
-			if s.framer == nil {
-				s.framer = NewADTSFramer()
-			}
+		// Frame-accurate audio parsing. Setting p.AlignOffset lets ElStream carry
+		// a straddling frame into the next PES.
+		if s.framer == nil {
+			s.framer = newAudioFramer(s.codec)
+		}
+		if s.framer != nil {
 			frames, missing, err := s.framer.Split(p.Data, p.PayloadLength, p.AlignOffset, p.PTS)
 			if err != nil {
 				s.splitErrs++

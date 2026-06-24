@@ -26,3 +26,15 @@ type AudioFramer interface {
 	// PES ends on a frame boundary).
 	Split(payload []byte, pesPayloadLen, alignOffset int, pts int64) (frames []AudioFrame, missing int, err error)
 }
+
+// newAudioFramer returns an AudioFramer for the codec, or nil if unsupported.
+func newAudioFramer(c Codec) AudioFramer {
+	switch c {
+	case CODEC_AAC:
+		return NewADTSFramer()
+	case CODEC_MP2:
+		return NewMP2Framer()
+	default:
+		return nil
+	}
+}
