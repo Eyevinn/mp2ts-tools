@@ -9,12 +9,13 @@ import (
 	"github.com/Comcast/gots/v2"
 	"github.com/Comcast/gots/v2/packet"
 	"github.com/Comcast/gots/v2/packet/adaptationfield"
+	"github.com/Comcast/gots/v2/pes"
 )
 
-// audioSparePES is how many audio PES past the loop end are kept in the segment
-// so the per-wrap drift controller can include the boundary-crossing PES. Two
-// would suffice for the worst-case A/V offset; three is a safety margin.
-const audioSparePES = 3
+// audioSpareFrames is how many audio frames past the loop end are kept in the
+// segment so the per-wrap drift controller can include the boundary-crossing
+// frame. Two would suffice for the worst-case offset; three is a safety margin.
+const audioSpareFrames = 3
 
 // LoopSegment is the prepared, perfectly-loopable byte segment: emitting it once
 // per wrap (with a per-wrap timestamp offset) yields a seamless constant-rate
@@ -80,7 +81,7 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	if pcrPid < 0 {
 		pcrPid = vpid
 	}
-	Vs, Ve := plan.StartPTS, plan.EndPTS
+	Vs := plan.StartPTS
 	startByte := int(plan.StartPktNr)
 	for _, a := range plan.Audio {
 		if a.StartPTS >= 0 && int(a.StartPktNr) < startByte {
@@ -96,10 +97,95 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	defer func() { _ = fh.Close() }()
 
 	var patPkt, pmtPkt []byte
-	content := make([]byte, 0, (endByte-startByte)*PacketSize)
-	curAudioPTS := make(map[int]int64)
+	// Non-audio packets in original order, and the re-packetized audio to insert
+	// before a given video-packet index (its original PES start position, so the
+	// audio keeps roughly its original timing — slightly earlier, which is safe).
+	videoOther := make([]byte, 0, (endByte-startByte)*PacketSize)
+	videoCount := 0
+	inserts := make(map[int][]byte)
+
+	audioFramers := make(map[int]AudioFramer)
+	for pid := range audioPIDs {
+		audioFramers[pid] = newAudioFramer(ts.ElStreams[pid].Codec)
+	}
+	audioBuf := make(map[int][]byte) // raw packets of the current audio PES per PID
+	pesInsertIdx := make(map[int]int)
+	audioStart := make(map[int]int64) // first kept audio frame PTS per PID
+	spareFrames := make(map[int]int)  // audio frames kept past the loop end (drift spares)
 	audioPast := make(map[int]bool)
-	sparePES := make(map[int]int) // audio PES kept at/after Ve (drift spares)
+
+	// keepFrame decides whether an audio frame at PTS p belongs in the segment.
+	// The audio loop for a PID runs [audioStart, audioStart+loopDur) where
+	// audioStart is its first frame at/after Vs; a few spare frames past the end
+	// are kept so the per-wrap drift controller has the boundary-crossing frame.
+	// keepFrame must use the same audioStart+loopDur boundary the emitter does.
+	keepFrame := func(pid int, p int64) bool {
+		if SignedPTSDiff(p, Vs) < 0 {
+			return false
+		}
+		if _, ok := audioStart[pid]; !ok {
+			audioStart[pid] = p
+		}
+		if SignedPTSDiff(p, audioStart[pid]+plan.LoopDurTicks) < 0 {
+			return true
+		}
+		spareFrames[pid]++
+		if spareFrames[pid] > audioSpareFrames {
+			audioPast[pid] = true
+			return false
+		}
+		return true
+	}
+
+	// finalizeAudio processes one fully-buffered audio PES. A multi-frame PES
+	// whose frames tile the payload is re-packetized into one PES per frame (so
+	// the loop can be cut on a frame boundary); single-frame or non-aligned PES
+	// are copied unchanged. The result is queued to be inserted at the PES's
+	// original start position.
+	finalizeAudio := func(pid int) {
+		raw := audioBuf[pid]
+		audioBuf[pid] = nil
+		if len(raw) == 0 {
+			return
+		}
+		idx := pesInsertIdx[pid]
+		emit := func(b []byte) { inserts[idx] = append(inserts[idx], b...) }
+		pesBytes := extractPESPayload(raw)
+		ph, err := pes.NewPESHeader(pesBytes)
+		if err != nil || !ph.HasPTS() {
+			return
+		}
+		pts := int64(ph.PTS())
+		payload := ph.Data()
+		framer := audioFramers[pid]
+		if framer == nil {
+			if keepFrame(pid, pts) {
+				emit(raw)
+			}
+			return
+		}
+		frames, missing, serr := framer.Split(payload, len(payload), 0, pts)
+		total := 0
+		for _, f := range frames {
+			total += f.Size
+		}
+		aligned := serr == nil && missing == 0 && len(frames) > 0 && total == len(payload)
+		if !aligned || len(frames) == 1 {
+			if keepFrame(pid, pts) {
+				emit(raw) // copy unchanged
+			}
+			return
+		}
+		streamID := ph.StreamId()
+		off := 0
+		for _, f := range frames {
+			fb := payload[off : off+f.Size]
+			off += f.Size
+			if keepFrame(pid, f.PTS) {
+				emit(packetizePES(pid, buildAudioPES(streamID, f.PTS, fb)))
+			}
+		}
+	}
 
 	var pkt packet.Packet
 	pktNr := -1
@@ -130,40 +216,19 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 			continue // drop original stuffing; we re-pad below
 		}
 
-		keep := false
-		switch {
-		case pid == vpid:
-			keep = pktNr < endByte
-		case audioPIDs[pid]:
-			// Keep audio whose PES is within [Vs, Ve), plus a few spare PES past
-			// Ve so the per-wrap drift controller always has the boundary-
-			// crossing PES available (spares are in PES units, which matters for
-			// multi-frame-per-PES audio such as AC-3).
+		if audioPIDs[pid] {
+			// Buffer the whole audio PES (across interleaved video) and process it
+			// at the next PES start of this PID.
 			if pkt.PayloadUnitStartIndicator() {
-				if p := GetPTS(&pkt); p >= 0 {
-					curAudioPTS[pid] = p
-					if SignedPTSDiff(p, Ve) >= 0 {
-						sparePES[pid]++
-						if sparePES[pid] > audioSparePES {
-							audioPast[pid] = true
-						}
-					}
-				}
+				finalizeAudio(pid)
+				pesInsertIdx[pid] = videoCount
+				audioBuf[pid] = append([]byte(nil), pkt[:]...)
+			} else if len(audioBuf[pid]) > 0 {
+				audioBuf[pid] = append(audioBuf[pid], pkt[:]...)
 			}
-			cur := curAudioPTS[pid]
-			switch {
-			case SignedPTSDiff(cur, Vs) < 0:
-				keep = false
-			case SignedPTSDiff(cur, Ve) < 0:
-				keep = true
-			default:
-				keep = sparePES[pid] <= audioSparePES
-			}
-		default:
-			keep = pktNr < endByte // PAT/PMT/pass-through PIDs
-		}
-		if keep {
-			content = append(content, pkt[:]...)
+		} else if pktNr < endByte {
+			videoOther = append(videoOther, pkt[:]...)
+			videoCount++
 		}
 
 		if pktNr >= endByte {
@@ -179,16 +244,28 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 			}
 		}
 	}
+	for pid := range audioPIDs {
+		finalizeAudio(pid)
+	}
 
 	if patPkt == nil || pmtPkt == nil {
 		return nil, fmt.Errorf("could not capture PAT/PMT packets")
 	}
 
-	// Assemble content with PAT/PMT prepended.
-	seg := make([]byte, 0, len(content)+2*PacketSize)
+	// Assemble: PAT/PMT, then video/other packets with the re-packetized audio
+	// inserted at each PES's original start position.
+	seg := make([]byte, 0, len(videoOther)+2*PacketSize)
 	seg = append(seg, patPkt...)
 	seg = append(seg, pmtPkt...)
-	seg = append(seg, content...)
+	for i := 0; i < videoCount; i++ {
+		if a := inserts[i]; len(a) > 0 {
+			seg = append(seg, a...)
+		}
+		seg = append(seg, videoOther[i*PacketSize:(i+1)*PacketSize]...)
+	}
+	if a := inserts[videoCount]; len(a) > 0 {
+		seg = append(seg, a...)
+	}
 	m := len(seg) / PacketSize
 
 	// Target packet count for the loop duration at the bitrate; re-pad with nulls.
@@ -215,13 +292,6 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 
 	// Regenerate a linear PCR across the segment spanning exactly LoopDurTicks.
 	stampLinearPCR(data, plan.LoopDurTicks, n)
-
-	audioStart := make(map[int]int64)
-	for _, a := range plan.Audio {
-		if a.StartPTS >= 0 {
-			audioStart[a.PID] = a.StartPTS
-		}
-	}
 
 	return &LoopSegment{
 		Data:          data,
