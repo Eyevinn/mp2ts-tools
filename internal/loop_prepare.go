@@ -11,6 +11,11 @@ import (
 	"github.com/Comcast/gots/v2/packet/adaptationfield"
 )
 
+// audioSparePES is how many audio PES past the loop end are kept in the segment
+// so the per-wrap drift controller can include the boundary-crossing PES. Two
+// would suffice for the worst-case A/V offset; three is a safety margin.
+const audioSparePES = 3
+
 // LoopSegment is the prepared, perfectly-loopable byte segment: emitting it once
 // per wrap (with a per-wrap timestamp offset) yields a seamless constant-rate
 // stream. Timestamps are baked for wrap 0; PCR is linear across the segment.
@@ -84,17 +89,6 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	}
 	endByte := int(plan.EndPktNr)
 
-	// Include a couple of spare audio frames past the loop end so the per-wrap
-	// drift controller always has the boundary-crossing frame available.
-	audioVeEnd := make(map[int]int64)
-	for _, a := range plan.Audio {
-		slack := int64(0)
-		if a.FrameDurTicks > 0 {
-			slack = 2 * a.FrameDurTicks
-		}
-		audioVeEnd[a.PID] = AddPTS(Ve, slack)
-	}
-
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -105,6 +99,7 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	content := make([]byte, 0, (endByte-startByte)*PacketSize)
 	curAudioPTS := make(map[int]int64)
 	audioPast := make(map[int]bool)
+	sparePES := make(map[int]int) // audio PES kept at/after Ve (drift spares)
 
 	var pkt packet.Packet
 	pktNr := -1
@@ -140,17 +135,30 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 		case pid == vpid:
 			keep = pktNr < endByte
 		case audioPIDs[pid]:
-			veEnd := audioVeEnd[pid]
+			// Keep audio whose PES is within [Vs, Ve), plus a few spare PES past
+			// Ve so the per-wrap drift controller always has the boundary-
+			// crossing PES available (spares are in PES units, which matters for
+			// multi-frame-per-PES audio such as AC-3).
 			if pkt.PayloadUnitStartIndicator() {
 				if p := GetPTS(&pkt); p >= 0 {
 					curAudioPTS[pid] = p
-					if SignedPTSDiff(p, veEnd) >= 0 {
-						audioPast[pid] = true
+					if SignedPTSDiff(p, Ve) >= 0 {
+						sparePES[pid]++
+						if sparePES[pid] > audioSparePES {
+							audioPast[pid] = true
+						}
 					}
 				}
 			}
 			cur := curAudioPTS[pid]
-			keep = SignedPTSDiff(cur, Vs) >= 0 && SignedPTSDiff(cur, veEnd) < 0
+			switch {
+			case SignedPTSDiff(cur, Vs) < 0:
+				keep = false
+			case SignedPTSDiff(cur, Ve) < 0:
+				keep = true
+			default:
+				keep = sparePES[pid] <= audioSparePES
+			}
 		default:
 			keep = pktNr < endByte // PAT/PMT/pass-through PIDs
 		}

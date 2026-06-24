@@ -41,6 +41,7 @@ func TestAudioDriftContinuousNoDrift(t *testing.T) {
 		{"mp2-48k-residual", 2160, 100000},   // not a multiple of 2160
 		{"tiny-residual", 2160, 2160*50 + 1}, // off by one tick
 		{"near-full-residual", 2160, 2160*50 - 1},
+		{"ac3-3frame-pes", 8640, 2610000}, // AC-3 3 frames/PES (step 8640), 720-tick residual
 	}
 	const wraps = 200
 	for _, c := range cases {
