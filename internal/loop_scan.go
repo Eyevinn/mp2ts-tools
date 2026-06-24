@@ -44,6 +44,7 @@ type PicRecord struct {
 	IsIDR       bool
 	IsCRA       bool
 	IsRAP       bool
+	IsRASL      bool // HEVC leading picture; must be dropped at a CRA loop seam
 	HasRecovery bool // recovery_point SEI (GDR) — detection TBD
 	PSPresent   bool // VPS/SPS/PPS carried in this access unit
 	Field       FieldParity
@@ -59,11 +60,15 @@ type AudioPESRec struct {
 
 // scanTrack collects per-PES scan records for one elementary stream.
 type scanTrack struct {
-	pid       int
-	codec     Codec
-	mediaType string
-	pics      []PicRecord
-	audio     []AudioPESRec
+	pid        int
+	codec      Codec
+	mediaType  string
+	pics       []PicRecord
+	audio      []AudioPESRec
+	framer     AudioFramer // audio only, codec-specific (AAC for now)
+	frames     int         // total audio frames seen
+	nonAligned bool        // any audio frame straddles a PES boundary
+	splitErrs  int         // audio PES that failed to split
 }
 
 // HandlePES implements PESHandler for the scan pass. It copies the fields it
@@ -83,6 +88,7 @@ func (s *scanTrack) HandlePES(p *PESData, last bool) error {
 			IsIDR:      au.IsIDR,
 			IsCRA:      au.IsCRA,
 			IsRAP:      au.IsRAP,
+			IsRASL:     au.IsRASL,
 			PSPresent:  au.PSComplete(s.codec),
 			Field:      FieldFrame, // TODO: detect field parity for interlaced streams
 		})
@@ -93,8 +99,35 @@ func (s *scanTrack) HandlePES(p *PESData, last bool) error {
 			StartPktNr: p.StartPktNr,
 			PayloadLen: p.PayloadLength,
 		})
+		// Frame-accurate audio parsing (AAC for now). Setting p.AlignOffset lets
+		// ElStream carry a straddling frame into the next PES.
+		if s.codec == CODEC_AAC {
+			if s.framer == nil {
+				s.framer = NewADTSFramer()
+			}
+			frames, missing, err := s.framer.Split(p.Data, p.PayloadLength, p.AlignOffset, p.PTS)
+			if err != nil {
+				s.splitErrs++
+				p.AlignOffset = 0
+			} else {
+				s.frames += len(frames)
+				if missing > 0 {
+					s.nonAligned = true
+				}
+				p.AlignOffset = missing
+			}
+		}
 	}
 	return nil
+}
+
+// audioFrameDur returns the audio frame duration in 90 kHz ticks, preferring the
+// exact value from the framer and falling back to the PES-step estimate.
+func (s *scanTrack) audioFrameDur() int64 {
+	if s.framer != nil && s.framer.FrameDurTicks() > 0 {
+		return s.framer.FrameDurTicks()
+	}
+	return audioFrameDurEstimate(s)
 }
 
 // Stat is a min/max/average summary of a set of integer steps.
@@ -129,6 +162,10 @@ type AudioScan struct {
 	PID           int    `json:"pid"`
 	Codec         string `json:"codec"`
 	PESCount      int    `json:"pesCount"`
+	Frames        int    `json:"frames"`
+	SampleRate    int    `json:"sampleRate"`
+	FrameDurTicks int64  `json:"frameDurTicks"`
+	NonPESAligned bool   `json:"nonPESAligned"`
 	PESStepTicks  Stat   `json:"pesStepTicks"`
 	FirstPTS      int64  `json:"firstPTS"`
 	LastPTS       int64  `json:"lastPTS"`
@@ -270,7 +307,14 @@ func analyzeVideo(st *scanTrack, fpsNum, fpsDen int) *VideoScan {
 }
 
 func analyzeAudio(st *scanTrack) *AudioScan {
-	a := &AudioScan{PID: st.pid, Codec: st.codec.String(), PESCount: len(st.audio)}
+	a := &AudioScan{
+		PID: st.pid, Codec: st.codec.String(), PESCount: len(st.audio),
+		Frames: st.frames, NonPESAligned: st.nonAligned,
+	}
+	if st.framer != nil {
+		a.SampleRate = st.framer.SampleRate()
+		a.FrameDurTicks = st.framer.FrameDurTicks()
+	}
 	if len(st.audio) == 0 {
 		return a
 	}

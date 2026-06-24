@@ -8,10 +8,11 @@ import (
 // RAPInfo describes the random-access properties of a coded picture (or field),
 // determined from its first VCL (slice) NAL unit.
 type RAPInfo struct {
-	IsVCL bool // a VCL (slice) NAL unit was found
-	IsIDR bool // AVC IDR, or HEVC IDR_W_RADL / IDR_N_LP
-	IsCRA bool // HEVC CRA (open-GOP random access)
-	IsRAP bool // any IRAP: IDR, CRA, or BLA
+	IsVCL  bool // a VCL (slice) NAL unit was found
+	IsIDR  bool // AVC IDR, or HEVC IDR_W_RADL / IDR_N_LP
+	IsCRA  bool // HEVC CRA (open-GOP random access)
+	IsRAP  bool // any IRAP: IDR, CRA, or BLA
+	IsRASL bool // HEVC RASL leading picture (undecodable after a CRA splice)
 }
 
 // ScanRAP scans the Annex-B NAL start codes in a PES payload and returns the
@@ -50,7 +51,8 @@ func naluRAP(codec Codec, firstByte byte) (RAPInfo, bool) {
 			IsIDR: nt == hevc.NALU_IDR_W_RADL || nt == hevc.NALU_IDR_N_LP,
 			IsCRA: nt == hevc.NALU_CRA,
 			// IRAP VCL types are BLA_W_LP(16) .. IRAP_VCL23(23).
-			IsRAP: nt >= hevc.NALU_BLA_W_LP && nt <= hevc.NALU_IRAP_VCL23,
+			IsRAP:  nt >= hevc.NALU_BLA_W_LP && nt <= hevc.NALU_IRAP_VCL23,
+			IsRASL: nt == hevc.NALU_RASL_N || nt == hevc.NALU_RASL_R,
 		}
 		return info, true
 	}
