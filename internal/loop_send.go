@@ -187,13 +187,27 @@ func (u *udpSink) Close() error {
 }
 
 // LoopToSink emits the prepared segment to a sink repeatedly. Each wrap advances
-// all PTS/DTS/PCR by the loop duration; continuity counters stay seamless across
-// the seam. maxWraps <= 0 loops forever (until ctx is cancelled).
+// video/PCR by the loop duration; audio is advanced by the loop duration plus a
+// per-wrap drift-free deltaPTS, dropping (nulling) the frame that crosses the
+// loop boundary so the audio cadence stays continuous without accumulating
+// drift. Continuity counters stay seamless across the seam. maxWraps <= 0 loops
+// forever (until ctx is cancelled).
 func LoopToSink(ctx context.Context, seg *LoopSegment, sink packetSink, maxWraps int) error {
 	cc := make(ccGen)
+	audio := make(map[int]*audioWrapState, len(seg.AudioStartPTS))
+	for pid, start := range seg.AudioStartPTS {
+		audio[pid] = newAudioWrapState(start, seg.LoopDurTicks)
+	}
+	keepPES := make(map[int]bool)   // current audio PES kept this wrap?
+	audioOff := make(map[int]int64) // current audio PES output offset
+	null := nullPacket()
+
 	var pkt packet.Packet
 	for wrap := 0; maxWraps <= 0 || wrap < maxWraps; wrap++ {
 		offset := int64(wrap) * seg.LoopDurTicks
+		for _, a := range audio {
+			a.onWrap()
+		}
 		for i := 0; i < seg.NumPackets; i++ {
 			select {
 			case <-ctx.Done():
@@ -203,6 +217,35 @@ func LoopToSink(ctx context.Context, seg *LoopSegment, sink packetSink, maxWraps
 			}
 			base := i * PacketSize
 			copy(pkt[:], seg.Data[base:base+PacketSize])
+			pid := packet.Pid(&pkt)
+
+			if st, isAudio := audio[pid]; isAudio {
+				if pkt.PayloadUnitStartIndicator() {
+					if p := GetPTS(&pkt); p >= 0 {
+						d, keep := st.frame(p)
+						keepPES[pid] = keep
+						audioOff[pid] = offset + d
+					}
+				}
+				if !keepPES[pid] {
+					if err := sink.WritePacket(null); err != nil {
+						return err
+					}
+					continue
+				}
+				if ao := audioOff[pid]; ao != 0 && pkt.PayloadUnitStartIndicator() {
+					if ph, err := packet.PESHeader(&pkt); err == nil && ph != nil {
+						rewriteTimestampsOffset(ph, ao)
+					}
+				}
+				c := cc.next(pid, packet.ContainsPayload(&pkt))
+				pkt[3] = (pkt[3] & 0xf0) | byte(c)
+				if err := sink.WritePacket(pkt[:]); err != nil {
+					return err
+				}
+				continue
+			}
+
 			seg.applyWrap(&pkt, offset, cc)
 			if err := sink.WritePacket(pkt[:]); err != nil {
 				return err
