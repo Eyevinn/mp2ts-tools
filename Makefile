@@ -2,13 +2,13 @@
 all: test check coverage build
 
 .PHONY: build
-build: mp2ts-info mp2ts-nallister mp2ts-pslister mp2ts-extract mp2ts-timeshift
+build: mp2ts-info mp2ts-nallister mp2ts-pslister mp2ts-extract mp2ts-timeshift mp2ts-loop
 
 .PHONY: prepare
 prepare:
 	go mod tidy
 
-mp2ts-info mp2ts-nallister mp2ts-pslister mp2ts-extract mp2ts-timeshift:
+mp2ts-info mp2ts-nallister mp2ts-pslister mp2ts-extract mp2ts-timeshift mp2ts-loop:
 	go build -ldflags "-X github.com/Eyevinn/mp2ts-tools/internal.commitVersion=$$(git describe --tags HEAD) -X github.com/Eyevinn/mp2ts-tools/internal.commitDate=$$(git log -1 --format=%ct)" -o out/$@ ./cmd/$@/main.go
 
 .PHONY: test
