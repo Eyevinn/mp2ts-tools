@@ -120,7 +120,7 @@ func selectLoop(vid *scanTrack, audios []*scanTrack, durCapMS, pcrPid int, bitra
 				break
 			}
 		}
-		la.FrameDurTicks = audioFrameDurEstimate(a)
+		la.FrameDurTicks = a.audioFrameDur()
 		if la.FrameDurTicks > 0 {
 			la.WholeFrames = (plan.LoopDurTicks + la.FrameDurTicks/2) / la.FrameDurTicks
 			la.ResidualTicks = plan.LoopDurTicks - la.WholeFrames*la.FrameDurTicks

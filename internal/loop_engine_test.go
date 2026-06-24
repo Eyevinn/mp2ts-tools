@@ -63,6 +63,18 @@ func TestScanRAP(t *testing.T) {
 	}
 }
 
+func TestScanRASL(t *testing.T) {
+	sc := []byte{0, 0, 1}
+	// HEVC RASL_R = type 9 -> first header byte 9<<1 = 0x12; RASL_N = 8 -> 0x10.
+	for _, b := range []byte{0x10, 0x12} {
+		data := append(append([]byte{}, sc...), b, 0x00)
+		got := ScanRAP(CODEC_HEVC, data)
+		if !got.IsVCL || !got.IsRASL || got.IsRAP || got.IsIDR {
+			t.Errorf("RASL byte 0x%02x: %+v", b, got)
+		}
+	}
+}
+
 func TestScanAUParameterSets(t *testing.T) {
 	sc := []byte{0, 0, 1}
 	// HEVC: VPS(0x40), SPS(0x42), PPS(0x44), then IDR_W_RADL(0x26).
