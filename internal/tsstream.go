@@ -12,7 +12,8 @@ import (
 
 // Stream type and descriptor tags not exported by gots/v2.
 const (
-	pmtStreamTypeMpeg1Layer2 = 3
+	pmtStreamTypeMpeg1Layer2 = 3 // ISO/IEC 11172-3 (MPEG-1 audio, MP2)
+	pmtStreamTypeMpeg2Audio  = 4 // ISO/IEC 13818-3 (MPEG-2 audio, MP2)
 	descTagAC3               = 0x6a
 	descTagISO639Language    = 0x0a
 	descTagTeletext          = 0x56
@@ -52,7 +53,7 @@ func codecFromStreamType(st uint8) Codec {
 		return CODEC_AC3
 	case psi.PmtStreamTypeEc3:
 		return CODEC_EC3
-	case pmtStreamTypeMpeg1Layer2:
+	case pmtStreamTypeMpeg1Layer2, pmtStreamTypeMpeg2Audio:
 		return CODEC_MP2
 	case psi.PmtStreamTypeScte35:
 		return CODEC_SCTE35
