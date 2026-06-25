@@ -18,6 +18,7 @@ const (
 	descTagISO639Language    = 0x0a
 	descTagTeletext          = 0x56
 	descTagDVBSubtitle       = 0x59
+	descTagANC               = 0xc4 // SMPTE-2038 ancillary data descriptor
 )
 
 // PCRSample is a single PCR observation: the output packet index and the PCR
@@ -25,6 +26,15 @@ const (
 type PCRSample struct {
 	PktNr int
 	PCR   int64
+}
+
+// PassThroughStream is a non-audio, non-video elementary stream (e.g. SMPTE-2038
+// ANC data) that the looper copies through unchanged, applying only the per-wrap
+// timestamp shift. It is reported by the scan so the operator knows it is kept.
+type PassThroughStream struct {
+	PID        int    `json:"pid"`
+	StreamType uint8  `json:"streamType"`
+	Label      string `json:"label"`
 }
 
 // TSStream is a single-program MPEG-2 TS with its audio, video, and SCTE-35
@@ -35,6 +45,7 @@ type TSStream struct {
 	PCRPid             int // -1 until a PCR-bearing PID is seen
 	pmt                psi.PMT
 	ElStreams          map[int]*ElStream
+	PassThrough        []PassThroughStream
 	totNrPkts          int
 	pcrSamples         []PCRSample
 	ContinuityCounters *ContinuityCounters
@@ -97,6 +108,7 @@ func InitTS(r io.ReadSeeker) (*TSStream, error) {
 		pid := e.ElementaryPid()
 		codec := codecFromStreamType(e.StreamType())
 		language := ""
+		isANC := false
 		for _, desc := range e.Descriptors() {
 			switch desc.Tag() {
 			case descTagAC3:
@@ -107,6 +119,8 @@ func InitTS(r io.ReadSeeker) (*TSStream, error) {
 				codec = CODEC_TELETEXT
 			case descTagDVBSubtitle:
 				codec = CODEC_DVB_SUBTITLES
+			case descTagANC:
+				isANC = true
 			}
 		}
 		switch {
@@ -117,7 +131,12 @@ func InitTS(r io.ReadSeeker) (*TSStream, error) {
 			ts.SCTE35Pid = pid
 			slog.Debug("SCTE-35 stream", "pid", pid)
 		default:
-			slog.Debug("pass-through stream", "pid", pid, "streamType", e.StreamType())
+			label := codec.String()
+			if isANC {
+				label = "smpte-2038"
+			}
+			ts.PassThrough = append(ts.PassThrough, PassThroughStream{PID: pid, StreamType: e.StreamType(), Label: label})
+			slog.Debug("pass-through stream", "pid", pid, "streamType", e.StreamType(), "label", label)
 		}
 	}
 	return ts, nil
