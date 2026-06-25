@@ -48,10 +48,11 @@ There is no `pkg/` directory. All shared code lives in `internal/`.
 
 **Other entry points:**
 - `ExtractES()` (`extract.go`) — Elementary stream extraction to Annex B format
+- `Scan()` / `PrepareLoop()` / `LoopToOutputs()` (`loop_*.go`) — The mp2ts-loop pipeline: scan for loop points (`loop_scan.go`), select the longest loop (`loop_select.go`), build the loopable segment in memory (`loop_prepare.go`), and emit it per wrap to file/UDP (`loop_send.go`). Uses gots/v2 (not astits) end to end, with NAL parsing via mp4ff. Open-GOP CRA loop points are rewritten to BLA at the seam (`loop_seam.go`).
 
 **Two TS libraries used for different purposes:**
-- `go-astits` — High-level demuxing (PAT/PMT/PES extraction). Used by most tools.
-- `gots/v2` — Low-level packet manipulation. Used by SCTE-35 parsing and PID filtering.
+- `go-astits` — High-level demuxing (PAT/PMT/PES extraction). Used by most analysis tools.
+- `gots/v2` — Low-level packet manipulation. Used by SCTE-35 parsing, PID filtering, and the whole mp2ts-loop pipeline.
 
 **Timestamp handling (`const.go`):**
 - 90kHz timescale (`TimeScale = 90000`), 33-bit PTS wrap (`PtsWrap = 1 << 33`)
@@ -64,11 +65,13 @@ Every tool follows the same 3-function pattern in `main.go`:
 2. A parse function — Calls the appropriate `internal.Parse*()` function
 3. `main()` — Calls `internal.ParseParams(parseOptions)` then `internal.Execute(os.Stdout, o, inFile, parseFn)`. Execute handles context/SIGINT, file open/close, and error reporting.
 
-Tools: `mp2ts-info`, `mp2ts-nallister`, `mp2ts-pslister`, `mp2ts-extract`, `mp2ts-timeshift`, `mp2ts-pidfilter`, `mp2ts-prepare`.
+Tools: `mp2ts-info`, `mp2ts-nallister`, `mp2ts-pslister`, `mp2ts-extract`, `mp2ts-timeshift`, `mp2ts-pidfilter`, `mp2ts-prepare`, `mp2ts-loop`.
+
+`mp2ts-loop` is the exception to the 3-function pattern: it has its own `Options`, scan/loop dispatch, and sinks (file/UDP) in `cmd/mp2ts-loop/main.go` rather than going through `Execute`.
 
 ### Testing
 
-Golden file tests in `internal/parser_test.go`. Test cases run various `Options` configurations against `.ts` files in `internal/testdata/` and compare output to `internal/testdata/golden_*.txt`.
+Golden file tests in `internal/parser_test.go` (analysis tools) and `internal/loop_scan_test.go` (`mp2ts-loop -scan` reports, golden `testdata/golden_scan_*.json`). Test cases run various `Options` configurations against `.ts` files in `internal/testdata/` and compare output to the golden files.
 
 - Run `go test ./internal/... -update` to regenerate golden files after intentional output changes
 - Golden files normalize `\r\n` to `\n` for cross-platform compatibility

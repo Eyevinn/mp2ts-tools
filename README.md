@@ -94,6 +94,45 @@ mp2ts-timeshift -offset 8589934592 -output output.ts input.ts
 mp2ts-timeshift -offset -9000000 input.ts > output.ts
 ```
 
+### mp2ts-loop
+
+`mp2ts-loop` loops a single-program transport stream seamlessly and forever. It
+scans the input for the longest loop bounded by a video random-access point (an
+IDR picture, or a CRA for open-GOP HEVC), keeps the video at a constant frame
+rate and constant GOP duration, matches the audio to the loop duration with no
+accumulated drift, and regenerates a perfect linear PCR for a constant-rate
+stream. For open-GOP (CRA) streams the loop-point picture is marked BLA so the
+seam decodes cleanly. Non-audio/video PIDs such as SMPTE-2038 ANC data are passed
+through and timestamp-shifted per wrap. The output can be written to a file or
+sent over UDP (unicast or multicast).
+
+The input must be a seekable file (stdin is not supported, since it is read more
+than once). Supported video is H.264 and H.265; supported audio is AAC, MP2, and
+AC-3. Ultra-low-latency / gradual-decoder-refresh streams (no IDR/CRA) cannot be
+looped and are reported as such.
+
+**Options:**
+- `-scan` - Scan only: print the loop-point analysis as JSON and exit
+- `-o <file>` - Output file path (requires `-m` so the file is bounded)
+- `-a <ip:port>` - Output UDP address (unicast or multicast); may loop forever
+- `-m N` - Maximum number of loop wraps (`-1` = infinite)
+- `-d N` - Target/maximum loop duration in ms (`0` = auto, longest possible)
+- `-fps R` - Frame-rate hint, e.g. `25`, `50`, `29.97`, `59.94`, or `num/den`
+- `-write-prepared <file>` - Also write the prepared single-loop TS (debug)
+- `-indent` - Indent the `-scan` JSON output
+
+**Examples:**
+```sh
+# Report loop-point candidates and stream analysis
+mp2ts-loop -scan input.ts
+
+# Write 3 loops to a file
+mp2ts-loop -m 3 -o out.ts input.ts
+
+# Loop forever to multicast UDP
+mp2ts-loop -a 239.0.0.1:1234 input.ts
+```
+
 ## How to run
 
 You can download and install any tool directly using
