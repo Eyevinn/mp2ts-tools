@@ -290,6 +290,12 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	}
 	n = len(data) / PacketSize
 
+	// For an open-GOP (CRA) loop, mark the loop-point picture BLA so the leading
+	// RASL units are discarded at every seam instead of corrupting the first GOP.
+	if plan.LoopPointType == "CRA" {
+		rewriteSeamCRAtoBLA(data, n, vpid)
+	}
+
 	// Regenerate a linear PCR across the segment spanning exactly LoopDurTicks.
 	stampLinearPCR(data, plan.LoopDurTicks, n)
 
