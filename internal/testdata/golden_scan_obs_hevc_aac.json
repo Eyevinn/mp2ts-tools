@@ -1,0 +1,78 @@
+{
+  "file": "testdata/obs_hevc_aac.ts",
+  "totalPackets": 595,
+  "video": {
+    "pid": 256,
+    "codec": "hevc",
+    "pictures": 59,
+    "frameRate": "30",
+    "constantFrameRate": true,
+    "dtsStepTicks": {
+      "min": 3000,
+      "max": 3000,
+      "avg": 3000
+    },
+    "field": "frame",
+    "loopPointType": "IDR",
+    "loopPoints": 2,
+    "gopDurationTicks": {
+      "min": 90000,
+      "max": 90000,
+      "avg": 90000
+    },
+    "constantGop": true,
+    "firstPTS": 1920,
+    "lastPTS": 175920,
+    "durationTicks": 174000,
+    "maxLoopTicks": 90000,
+    "maxLoopGops": 1
+  },
+  "audio": [
+    {
+      "pid": 257,
+      "codec": "aac",
+      "pesCount": 94,
+      "frames": 94,
+      "sampleRate": 48000,
+      "frameDurTicks": 1920,
+      "nonPESAligned": false,
+      "pesStepTicks": {
+        "min": 1920,
+        "max": 1920,
+        "avg": 1920
+      },
+      "firstPTS": 0,
+      "lastPTS": 178560,
+      "durationTicks": 178560
+    }
+  ],
+  "loop": {
+    "loopPointType": "IDR",
+    "numGops": 1,
+    "startPktNr": 3,
+    "endPktNr": 292,
+    "startPTS": 1920,
+    "endPTS": 91920,
+    "loopDurTicks": 90000,
+    "loopDurMs": 1000,
+    "psAtStart": true,
+    "audio": [
+      {
+        "pid": 257,
+        "startPTS": 1920,
+        "startPktNr": 75,
+        "frameDurTicks": 1920,
+        "wholeFrames": 47,
+        "residualTicks": -240
+      }
+    ],
+    "pcr": {
+      "pid": 256,
+      "constantRate": false,
+      "bitrateBps": 448905,
+      "segmentPackets": 289,
+      "idealPackets": 298,
+      "stuffingDelta": -9
+    }
+  }
+}

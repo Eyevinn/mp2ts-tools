@@ -174,12 +174,13 @@ type AudioScan struct {
 
 // ScanReport is the result of the scan pass, emitted by `mp2ts-loop -scan`.
 type ScanReport struct {
-	File         string       `json:"file"`
-	TotalPackets int          `json:"totalPackets"`
-	Video        *VideoScan   `json:"video,omitempty"`
-	Audio        []*AudioScan `json:"audio,omitempty"`
-	Loop         *LoopPlan    `json:"loop,omitempty"`
-	Note         string       `json:"note,omitempty"`
+	File         string              `json:"file"`
+	TotalPackets int                 `json:"totalPackets"`
+	Video        *VideoScan          `json:"video,omitempty"`
+	Audio        []*AudioScan        `json:"audio,omitempty"`
+	PassThrough  []PassThroughStream `json:"passThrough,omitempty"`
+	Loop         *LoopPlan           `json:"loop,omitempty"`
+	Note         string              `json:"note,omitempty"`
 }
 
 // runScan opens the file, identifies the streams, and runs the analysis pass,
@@ -243,6 +244,7 @@ func Scan(ctx context.Context, path string, fpsNum, fpsDen, durCapMS int) (*Scan
 	for _, a := range auds {
 		rep.Audio = append(rep.Audio, analyzeAudio(a))
 	}
+	rep.PassThrough = ts.PassThrough
 	bitrate, cbr := loopBitrate(ts)
 	rep.Loop = selectLoop(vid, auds, durCapMS, ts.PCRPid, bitrate, cbr)
 	return rep, nil

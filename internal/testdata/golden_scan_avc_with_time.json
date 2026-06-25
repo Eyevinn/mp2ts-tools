@@ -1,0 +1,44 @@
+{
+  "file": "testdata/avc_with_time.ts",
+  "totalPackets": 400,
+  "video": {
+    "pid": 512,
+    "codec": "avc",
+    "pictures": 9,
+    "frameRate": "50",
+    "constantFrameRate": true,
+    "dtsStepTicks": {
+      "min": 1800,
+      "max": 1800,
+      "avg": 1800
+    },
+    "field": "frame",
+    "loopPointType": "none",
+    "loopPoints": 0,
+    "gopDurationTicks": {
+      "min": 0,
+      "max": 0,
+      "avg": 0
+    },
+    "constantGop": false,
+    "firstPTS": 5491800,
+    "lastPTS": 5506200,
+    "durationTicks": 14400,
+    "maxLoopTicks": 0,
+    "maxLoopGops": 0
+  },
+  "loop": {
+    "loopPointType": "none",
+    "numGops": 0,
+    "startPktNr": 0,
+    "endPktNr": 0,
+    "startPTS": 0,
+    "endPTS": 0,
+    "loopDurTicks": 0,
+    "loopDurMs": 0,
+    "psAtStart": false,
+    "warnings": [
+      "fewer than two eligible loop points; cannot loop"
+    ]
+  }
+}
