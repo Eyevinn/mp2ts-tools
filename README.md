@@ -1,7 +1,6 @@
 ![Test](https://github.com/Eyevinn/mp2ts-tools/workflows/Go/badge.svg)
 [![golangci-lint](https://github.com/Eyevinn/mp2ts-tools/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/Eyevinn/mp2ts-tools/actions/workflows/golangci-lint.yml)
 [![GoDoc](https://godoc.org/github.com/Eyevinn/mp2ts-tools?status.svg)](http://godoc.org/github.com/Eyevinn/mp2ts-tools)
-[![Go Report Card](https://goreportcard.com/badge/github.com/Eyevinn/mp2ts-tools)](https://goreportcard.com/report/github.com/Eyevinn/mp2ts-tools)
 [![license](https://img.shields.io/github/license/Eyevinn/mp2ts-tools.svg)](https://github.com/Eyevinn/mp2ts-tools/blob/master/LICENSE)
 
 # mp2ts-tools - A collection of tools for MPEG-2 TS
