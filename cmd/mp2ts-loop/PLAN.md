@@ -107,6 +107,72 @@ frame pictures (`+ilme+ildct`, constant top_field_first) loop like progressive; 
 repeat_first_field / pulldown, and parity continuity belong to the interlace work
 (extensibility requirement 2).
 
+## Interlace — plan (next, after MPEG-2)
+
+Expands extensibility requirement 2. The scan is field-unaware today: every PES is one
+`PicRecord` with `Field` = frame (MPEG-2 fills it from `picture_structure` but nothing uses it),
+and the report's `field` is hard-coded `"frame"`.
+
+**What already loops cleanly (validated 2026-09-30, ffmpeg decode clean, field order continuous
+across seams):**
+- Frame-coded interlace with a constant field order: MPEG-2 `+ilme+ildct` 1080i25, AVC MBAFF
+  (x264 `tff=1`). These are frame pictures, so they loop like progressive.
+- HEVC field coding from x265 `interlace=tff` (one field per PES, pic_timing `pic_struct` 1/2),
+  but only by luck: x265 puts every IDR on a top field every 50 fields. The report calls it
+  50 fps frames.
+
+**Shared infrastructure (all codecs):**
+1. `PESData` has no has-PTS flag; a PES without PTS reads as PTS 0. Field-per-PES streams may
+   omit PTS on the second field, which breaks DTS steps, the loop window, and the MPEG-2
+   leading-B check. Track `HasPTS` and derive/skip as needed.
+2. Per-picture field parity (top/bottom/frame) plus pairing: one PES may hold a field pair (AVC
+   PAFF, MPEG-2 field pictures), or one field (HEVC, some PAFF muxes).
+3. Fold fields into frames for frame rate, GOP, and report (`field`: progressive / interlaced
+   frame / field-coded, and the first-field parity).
+4. Loop-point eligibility: the first field of a frame, with the stream's first-field parity.
+   Loop length is a whole number of frames (even field count), so field order continues across
+   the seam.
+5. Validation: validate.py per-field parity across seams, plus
+   `ffprobe -show_entries frame=top_field_first,interlaced_frame`.
+
+**MPEG-2** (easiest; mostly done): frame pictures work. Remaining: field pictures (pair in one
+PES or split over two), `top_field_first` continuity, and `repeat_first_field` pulldown (below).
+The ffmpeg encoder cannot make field pictures, so field-picture MPEG-2 needs a broadcast capture.
+
+**AVC — MBAFF vs PAFF:**
+- MBAFF (`mb_adaptive_frame_field_flag`, `field_pic_flag=0`): frame pictures, loops like
+  progressive. Only field order continuity (pic_timing `pic_struct` 3/4) needs checking. Test
+  content: x264 `tff=1` / `bff=1`.
+- PAFF (`field_pic_flag=1`, `bottom_field_flag`): each field is its own access unit and needs a
+  slice-header parse with the active SPS (`frame_mbs_only_flag`, `log2_max_frame_num`). mp4ff
+  and the nallister POC/QP code already do this. An IDR is the first field only; the second
+  field is non-IDR. Streams can switch between PAFF field pairs and MBAFF frames per picture, so
+  classify per AU. No local encoder makes PAFF (x264 does MBAFF only): needs a broadcast capture.
+- Related, common in broadcast interlaced AVC: open GOP without IDRs, where loop points are
+  non-IDR I pictures with a recovery_point SEI (`recovery_frame_cnt=0`). The seam marker is the
+  SEI's `broken_link_flag` (the analog of MPEG-2 `broken_link` and HEVC CRA→BLA).
+
+**HEVC — field coding** (`field_seq_flag=1`, most complex): no interlace coding tools; each field
+is a picture/AU (usually one PES). Parity comes from the pic_timing SEI `pic_struct` (1/2, or 9–12
+paired with the previous/next field). It needs VUI `frame_field_info_present_flag`, and mp4ff
+already parses `FrameFieldInfo`. Work items:
+- IRAP on the first field; reject or skip loop points on the wrong parity.
+- Open GOP: if both fields of the loop-point frame are CRA, the second field's CRA is in the next
+  AU. `rewriteSeamCRAtoBLA` only patches the first AU, so it must patch both. RASL leading fields
+  are dropped at the BLA as before.
+- Frame-coded interlaced HEVC (`field_seq_flag=0`, `pic_struct` 3/4) loops like progressive.
+- Test content: x265 `interlace=tff` + `separatefields` (IDR/CRA field streams, keyint in fields;
+  odd keyint forces bottom-field IRAPs). The GDR caps (`cap_*_i25`) also need the GDR policy.
+
+**Pulldown / repeat-field** (MPEG-2 `repeat_first_field`, AVC/HEVC `pic_struct` 5–8): coded
+frame cadence ≠ display cadence, so DTS steps alternate (e.g. 3003/4504) and the constant-rate
+check fails. The loop must hold whole pulldown cycles and continue the TFF/RFF pattern.
+Initially detect and warn/refuse.
+
+**Order:** shared infrastructure (1–4) → MBAFF + MPEG-2 frame-picture parity checks (testable
+now) → HEVC field coding (testable with x265) → PAFF and MPEG-2 field pictures (need captures)
+→ pulldown.
+
 ## Core types / interfaces (the extensibility seams)
 
 ```
