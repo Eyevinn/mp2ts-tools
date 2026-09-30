@@ -21,6 +21,37 @@ func tsPayloadOffset(b []byte) int {
 	}
 }
 
+// firstAUBytes reassembles the payload of the segment's first video access unit
+// (from the first video PUSI up to the next one) and returns it along with the
+// position in data of each byte, so a header field can be patched in place.
+func firstAUBytes(data []byte, n, videoPID int) (buf []byte, pos []int) {
+	start := -1
+	for i := 0; i < n; i++ {
+		b := data[i*PacketSize : i*PacketSize+PacketSize]
+		if tsPID(b) == videoPID && tsPUSI(b) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return nil, nil
+	}
+	for i := start; i < n; i++ {
+		b := data[i*PacketSize : i*PacketSize+PacketSize]
+		if tsPID(b) != videoPID {
+			continue
+		}
+		if i != start && tsPUSI(b) {
+			break
+		}
+		for o := tsPayloadOffset(b); o < PacketSize; o++ {
+			buf = append(buf, b[o])
+			pos = append(pos, i*PacketSize+o)
+		}
+	}
+	return buf, pos
+}
+
 // rewriteSeamCRAtoBLA rewrites every CRA slice NAL unit in the segment's first
 // video access unit (the loop point) to BLA_W_LP, and returns how many it changed.
 //
@@ -33,36 +64,7 @@ func tsPayloadOffset(b []byte) int {
 // POC, making the seam clean. Baking this into the segment is also correct for
 // wrap 0, where a BLA at stream start behaves exactly like the CRA did.
 func rewriteSeamCRAtoBLA(data []byte, n, videoPID int) int {
-	start := -1
-	for i := 0; i < n; i++ {
-		b := data[i*PacketSize : i*PacketSize+PacketSize]
-		if tsPID(b) == videoPID && tsPUSI(b) {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		return 0
-	}
-	// Reassemble the first access unit's payload bytes, mapping each byte back to
-	// its (packet, offset) so a flip can be written in place. Stop at the next
-	// video PUSI (the following access unit).
-	var buf []byte
-	var pktIdx, offIdx []int
-	for i := start; i < n; i++ {
-		b := data[i*PacketSize : i*PacketSize+PacketSize]
-		if tsPID(b) != videoPID {
-			continue
-		}
-		if i != start && tsPUSI(b) {
-			break
-		}
-		for o := tsPayloadOffset(b); o < PacketSize; o++ {
-			buf = append(buf, b[o])
-			pktIdx = append(pktIdx, i)
-			offIdx = append(offIdx, o)
-		}
-	}
+	buf, pos := firstAUBytes(data, n, videoPID)
 	flips := 0
 	for k := 0; k+3 < len(buf); k++ {
 		if buf[k] != 0 || buf[k+1] != 0 || buf[k+2] != 1 {
@@ -74,8 +76,39 @@ func rewriteSeamCRAtoBLA(data []byte, n, videoPID int) int {
 		}
 		// Keep the forbidden_zero_bit (bit 7) and the layer-id MSB (bit 0); only
 		// replace the 6-bit nal_unit_type field.
-		data[pktIdx[k+3]*PacketSize+offIdx[k+3]] = (h & 0x81) | (byte(hevc.NALU_BLA_W_LP) << 1)
+		data[pos[k+3]] = (h & 0x81) | (byte(hevc.NALU_BLA_W_LP) << 1)
 		flips++
 	}
 	return flips
+}
+
+// markSeamBrokenLink sets broken_link in the GOP header of the segment's first
+// video access unit (the loop point) if that GOP is open, and reports whether it
+// did. It is the MPEG-2 counterpart of rewriteSeamCRAtoBLA.
+//
+// In an open GOP (closed_gop=0), the B-pictures that follow the I picture in
+// coding order predict from the previous GOP's last anchor picture. At a loop
+// seam that picture is the previous wrap's tail, not the one they were encoded
+// against. They still decode without errors, since the reference exists, but the
+// result is wrong. broken_link=1 is how ISO/IEC 13818-2 marks such an edit, so a
+// decoder may drop or conceal those B-pictures. Like the BLA rewrite, it is also
+// correct for wrap 0.
+func markSeamBrokenLink(data []byte, n, videoPID int) bool {
+	buf, pos := firstAUBytes(data, n, videoPID)
+	for k := 0; k+7 < len(buf); k++ {
+		if buf[k] != 0 || buf[k+1] != 0 || buf[k+2] != 1 {
+			continue
+		}
+		switch buf[k+3] {
+		case mpeg2GroupStart:
+			if buf[k+7]&mpeg2ClosedGOPBit != 0 {
+				return false // closed GOP: the B-pictures predict only from the I picture
+			}
+			data[pos[k+7]] |= mpeg2BrokenLinkBit
+			return true
+		case mpeg2PictureStart:
+			return false // no GOP header before the first picture
+		}
+	}
+	return false
 }

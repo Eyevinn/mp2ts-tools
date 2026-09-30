@@ -140,6 +140,8 @@ func ParseAstitsElementaryStreamInfo(es *astits.PMTElementaryStream) *Elementary
 		streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "E-AC-3", Type: "audio"}
 	case astits.StreamTypeH265Video:
 		streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "HEVC", Type: "video"}
+	case astits.StreamTypeMPEG2Video:
+		streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "MPEG-2", Type: "video"}
 	case astits.StreamTypeSCTE35:
 		streamInfo = &ElementaryStreamInfo{PID: es.ElementaryPID, Codec: "SCTE35", Type: "cue"}
 	case astits.StreamTypePrivateData:
@@ -193,6 +195,8 @@ func ParseElementaryStreamInfo(es psi.PmtElementaryStream) *ElementaryStreamInfo
 		streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "E-AC-3", Type: "audio"}
 	case psi.PmtStreamTypeMpeg4VideoH265:
 		streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "HEVC", Type: "video"}
+	case psi.PmtStreamTypeMpeg2VideoH262:
+		streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "MPEG-2", Type: "video"}
 	case psi.PmtStreamTypeScte35:
 		streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "SCTE35", Type: "cue"}
 	}

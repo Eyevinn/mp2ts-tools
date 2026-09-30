@@ -69,6 +69,12 @@ type scanTrack struct {
 	frames     int         // total audio frames seen
 	nonAligned bool        // any audio frame straddles a PES boundary
 	splitErrs  int         // audio PES that failed to split
+
+	// MPEG-2 only: an open-GOP I picture (pics[openIdx]) waiting for the next
+	// coded picture to show whether it has leading B-pictures.
+	openPending   bool
+	openIdx       int
+	openSkipField bool // the next PES is the I picture's second field
 }
 
 // HandlePES implements PESHandler for the scan pass. It copies the fields it
@@ -80,6 +86,11 @@ func (s *scanTrack) HandlePES(p *PESData, last bool) error {
 	switch s.mediaType {
 	case "video":
 		au := ScanAU(s.codec, p.Data)
+		field := FieldFrame // TODO: detect field parity for interlaced AVC/HEVC
+		if s.codec == CODEC_MPEG2V {
+			s.resolveMPEG2Leading(au)
+			field = au.Field
+		}
 		s.pics = append(s.pics, PicRecord{
 			PTS:        p.PTS,
 			DTS:        p.DTS,
@@ -90,8 +101,12 @@ func (s *scanTrack) HandlePES(p *PESData, last bool) error {
 			IsRAP:      au.IsRAP,
 			IsRASL:     au.IsRASL,
 			PSPresent:  au.PSComplete(s.codec),
-			Field:      FieldFrame, // TODO: detect field parity for interlaced streams
+			Field:      field,
 		})
+		if s.codec == CODEC_MPEG2V && au.IsCRA {
+			s.openPending, s.openIdx = true, len(s.pics)-1
+			s.openSkipField = au.Field == FieldTop || au.Field == FieldBottom
+		}
 	case "audio":
 		s.audio = append(s.audio, AudioPESRec{
 			PTS:        p.PTS,
@@ -121,6 +136,26 @@ func (s *scanTrack) HandlePES(p *PESData, last bool) error {
 	return nil
 }
 
+// resolveMPEG2Leading settles a pending open-GOP I picture once the next coded
+// picture au is known. closed_gop=0 only matters if B-pictures follow the I
+// picture in coding order: they display before it and predict from the previous
+// GOP, which at a loop seam is the previous wrap's tail. If the next picture is
+// not a B-picture there are none, and the I picture is a clean loop point.
+func (s *scanTrack) resolveMPEG2Leading(au AUInfo) {
+	if !s.openPending || !au.IsVCL {
+		return
+	}
+	if s.openSkipField {
+		s.openSkipField = false
+		return
+	}
+	s.openPending = false
+	if au.PicType != mpeg2PicB {
+		p := &s.pics[s.openIdx]
+		p.IsIDR, p.IsCRA = true, false
+	}
+}
+
 // audioFrameDur returns the audio frame duration in 90 kHz ticks, preferring the
 // exact value from the framer and falling back to the PES-step estimate.
 func (s *scanTrack) audioFrameDur() int64 {
@@ -146,7 +181,7 @@ type VideoScan struct {
 	ConstantFrameRate bool   `json:"constantFrameRate"`
 	DTSStepTicks      Stat   `json:"dtsStepTicks"`
 	Field             string `json:"field"`
-	LoopPointType     string `json:"loopPointType"` // IDR | CRA | RAP | none
+	LoopPointType     string `json:"loopPointType"` // IDR | CRA | RAP | I-closed | I-open | none
 	LoopPoints        int    `json:"loopPoints"`
 	GOPDurationTicks  Stat   `json:"gopDurationTicks"`
 	ConstantGOP       bool   `json:"constantGop"`
@@ -269,28 +304,13 @@ func analyzeVideo(st *scanTrack, fpsNum, fpsDen int) *VideoScan {
 		v.FrameRate = classifyFrameRateLabel(v.DTSStepTicks.Avg)
 	}
 
-	var idr, cra, rap []int64
-	for _, p := range st.pics {
-		if p.IsIDR {
-			idr = append(idr, p.PTS)
-		}
-		if p.IsCRA {
-			cra = append(cra, p.PTS)
-		}
-		if p.IsRAP {
-			rap = append(rap, p.PTS)
-		}
-	}
+	var eligible func(PicRecord) bool
+	v.LoopPointType, eligible = loopPointClass(st.codec, st.pics)
 	var loopPTS []int64
-	switch {
-	case len(idr) > 0:
-		v.LoopPointType, loopPTS = "IDR", idr
-	case len(cra) > 0:
-		v.LoopPointType, loopPTS = "CRA", cra
-	case len(rap) > 0:
-		v.LoopPointType, loopPTS = "RAP", rap
-	default:
-		v.LoopPointType = "none"
+	for _, p := range st.pics {
+		if eligible(p) {
+			loopPTS = append(loopPTS, p.PTS)
+		}
 	}
 	v.LoopPoints = len(loopPTS)
 	if len(loopPTS) >= 2 {

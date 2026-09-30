@@ -22,14 +22,15 @@ var usg = `Usage of %s:
 %s loops a single-program MPEG-2 TS file seamlessly and forever.
 
 It scans the input for the longest loop bounded by a video random-access point
-(an IDR picture, or a CRA when the stream has no IDR), keeping the video at a
-constant frame rate and constant GOP duration. Audio is matched to the average
+(an IDR picture, a CRA when the stream has no IDR, or an MPEG-2 I picture with a
+sequence header), keeping the video at a constant frame rate and constant GOP
+duration. Audio is matched to the average
 loop duration with no accumulated drift, and PCR is kept perfect for a
 constant-rate TS. The output can be written to a file or sent over UDP.
 
 The input must be a seekable file (stdin is not supported, since the tool reads
-it more than once). The supported codecs are H.264 and H.265 video and AAC audio
-(other audio codecs are planned).
+it more than once). The supported codecs are H.264, H.265, and MPEG-2 video and
+AAC, MP2, and AC-3 audio.
 `
 
 // FrameRate is a rational frame rate num/den (frames per second = num/den).

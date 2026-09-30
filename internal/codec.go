@@ -8,6 +8,7 @@ type Codec uint32
 const (
 	CODEC_AVC Codec = iota
 	CODEC_HEVC
+	CODEC_MPEG2V // MPEG-2 video (ISO/IEC 13818-2, H.262)
 	CODEC_AAC
 	CODEC_AC3
 	CODEC_EC3
@@ -26,6 +27,8 @@ func (c Codec) String() string {
 		return "avc"
 	case CODEC_HEVC:
 		return "hevc"
+	case CODEC_MPEG2V:
+		return "mpeg2video"
 	case CODEC_AAC:
 		return "aac"
 	case CODEC_AC3:
@@ -51,7 +54,7 @@ func (c Codec) String() string {
 
 // IsVideo reports whether the codec is a video codec.
 func (c Codec) IsVideo() bool {
-	return c == CODEC_AVC || c == CODEC_HEVC
+	return c == CODEC_AVC || c == CODEC_HEVC || c == CODEC_MPEG2V
 }
 
 // IsAudio reports whether the codec is an audio codec.

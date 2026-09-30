@@ -40,6 +40,55 @@ type LoopPlan struct {
 	Warnings      []string    `json:"warnings,omitempty"`
 }
 
+// Loop-point classes, from cleanest to least clean. MPEG-2 has no IDR or CRA
+// pictures, so its closed- and open-GOP I pictures get their own names.
+const (
+	loopPointIDR     = "IDR"
+	loopPointCRA     = "CRA"
+	loopPointRAP     = "RAP"
+	loopPointClosedI = "I-closed"
+	loopPointOpenI   = "I-open"
+	loopPointNone    = "none"
+)
+
+// loopPointClass picks the class of pictures to loop on: closed-GOP random access
+// (IDR), then open-GOP (CRA), then any RAP. A loop needs two points of one class,
+// so a class with fewer falls through to the next: encoders that close only the
+// first GOP (MPEG-2 without closed GOPs, x265 open-gop) then loop on the open
+// GOPs. If no class has two points, the first non-empty one names the result.
+func loopPointClass(codec Codec, pics []PicRecord) (string, func(PicRecord) bool) {
+	classes := []struct {
+		label    string
+		eligible func(PicRecord) bool
+	}{
+		{loopPointIDR, func(p PicRecord) bool { return p.IsIDR }},
+		{loopPointCRA, func(p PicRecord) bool { return p.IsCRA }},
+		{loopPointRAP, func(p PicRecord) bool { return p.IsRAP }},
+	}
+	if codec == CODEC_MPEG2V {
+		classes[0].label, classes[1].label = loopPointClosedI, loopPointOpenI
+	}
+	first := -1
+	for i, c := range classes {
+		n := 0
+		for _, p := range pics {
+			if c.eligible(p) {
+				n++
+			}
+		}
+		if n >= 2 {
+			return c.label, c.eligible
+		}
+		if n > 0 && first < 0 {
+			first = i
+		}
+	}
+	if first >= 0 {
+		return classes[first].label, classes[first].eligible
+	}
+	return loopPointNone, func(PicRecord) bool { return false }
+}
+
 // selectLoop chooses the longest loop (or the longest within durCapMS) ending on
 // an eligible loop point, and computes the audio fit and PCR/stuffing budget.
 func selectLoop(vid *scanTrack, audios []*scanTrack, durCapMS, pcrPid int, bitrate int64, cbr bool) *LoopPlan {
@@ -47,22 +96,7 @@ func selectLoop(vid *scanTrack, audios []*scanTrack, durCapMS, pcrPid int, bitra
 		return nil
 	}
 
-	hasIDR, hasCRA, hasRAP := false, false, false
-	for _, p := range vid.pics {
-		hasIDR = hasIDR || p.IsIDR
-		hasCRA = hasCRA || p.IsCRA
-		hasRAP = hasRAP || p.IsRAP
-	}
-	loopType := "none"
-	eligible := func(p PicRecord) bool { return false }
-	switch {
-	case hasIDR:
-		loopType, eligible = "IDR", func(p PicRecord) bool { return p.IsIDR }
-	case hasCRA:
-		loopType, eligible = "CRA", func(p PicRecord) bool { return p.IsCRA }
-	case hasRAP:
-		loopType, eligible = "RAP", func(p PicRecord) bool { return p.IsRAP }
-	}
+	loopType, eligible := loopPointClass(vid.codec, vid.pics)
 
 	type point struct {
 		pts int64
@@ -110,6 +144,9 @@ func selectLoop(vid *scanTrack, audios []*scanTrack, durCapMS, pcrPid int, bitra
 	plan.PSAtStart = start.ps
 	if !start.ps {
 		plan.Warnings = append(plan.Warnings, "start loop point does not carry parameter sets; they must be inserted at the seam")
+	}
+	if loopType == loopPointOpenI {
+		plan.Warnings = append(plan.Warnings, "open-GOP loop point: the B-pictures leading each seam predict from the previous wrap's tail (marked broken_link); expect a brief visual transient")
 	}
 
 	for _, a := range audios {

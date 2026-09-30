@@ -1,0 +1,81 @@
+{
+  "file": "testdata/mpeg2_open_mp2.ts",
+  "totalPackets": 687,
+  "video": {
+    "pid": 256,
+    "codec": "mpeg2video",
+    "pictures": 49,
+    "frameRate": "25",
+    "constantFrameRate": true,
+    "dtsStepTicks": {
+      "min": 3600,
+      "max": 3600,
+      "avg": 3600
+    },
+    "field": "frame",
+    "loopPointType": "I-open",
+    "loopPoints": 4,
+    "gopDurationTicks": {
+      "min": 43200,
+      "max": 43200,
+      "avg": 43200
+    },
+    "constantGop": true,
+    "firstPTS": 129600,
+    "lastPTS": 302400,
+    "durationTicks": 172800,
+    "maxLoopTicks": 129600,
+    "maxLoopGops": 3
+  },
+  "audio": [
+    {
+      "pid": 257,
+      "codec": "mp2",
+      "pesCount": 5,
+      "frames": 75,
+      "sampleRate": 48000,
+      "frameDurTicks": 2160,
+      "nonPESAligned": false,
+      "pesStepTicks": {
+        "min": 32400,
+        "max": 32400,
+        "avg": 32400
+      },
+      "firstPTS": 128698,
+      "lastPTS": 258298,
+      "durationTicks": 129600
+    }
+  ],
+  "loop": {
+    "loopPointType": "I-open",
+    "numGops": 3,
+    "startPktNr": 252,
+    "endPktNr": 626,
+    "startPTS": 172800,
+    "endPTS": 302400,
+    "loopDurTicks": 129600,
+    "loopDurMs": 1440,
+    "psAtStart": true,
+    "audio": [
+      {
+        "pid": 257,
+        "startPTS": 193498,
+        "startPktNr": 404,
+        "frameDurTicks": 2160,
+        "wholeFrames": 60,
+        "residualTicks": 0
+      }
+    ],
+    "pcr": {
+      "pid": 256,
+      "constantRate": true,
+      "bitrateBps": 500000,
+      "segmentPackets": 374,
+      "idealPackets": 479,
+      "stuffingDelta": -105
+    },
+    "warnings": [
+      "open-GOP loop point: the B-pictures leading each seam predict from the previous wrap's tail (marked broken_link); expect a brief visual transient"
+    ]
+  }
+}

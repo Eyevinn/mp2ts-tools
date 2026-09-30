@@ -68,11 +68,12 @@ func PrepareLoop(ctx context.Context, path string, fpsNum, fpsDen, durCapMS int)
 // to the target bitrate with fresh null stuffing, and regenerates a linear PCR.
 func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *LoopPlan, bitrate int64) (*LoopSegment, error) {
 	vpid := -1
+	vcodec := CODEC_UNKNOWN
 	audioPIDs := make(map[int]bool)
 	for pid, es := range ts.ElStreams {
 		switch es.MediaType {
 		case "video":
-			vpid = pid
+			vpid, vcodec = pid, es.Codec
 		case "audio":
 			audioPIDs[pid] = true
 		}
@@ -290,10 +291,14 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	}
 	n = len(data) / PacketSize
 
-	// For an open-GOP (CRA) loop, mark the loop-point picture BLA so the leading
-	// RASL units are discarded at every seam instead of corrupting the first GOP.
-	if plan.LoopPointType == "CRA" {
+	// For an open-GOP loop point, mark the splice so the pictures leading each
+	// seam are handled: HEVC CRA becomes BLA (RASL discarded instead of corrupting
+	// the first GOP); MPEG-2 gets broken_link. Both are no-ops for closed GOPs.
+	switch vcodec {
+	case CODEC_HEVC:
 		rewriteSeamCRAtoBLA(data, n, vpid)
+	case CODEC_MPEG2V:
+		markSeamBrokenLink(data, n, vpid)
 	}
 
 	// Regenerate a linear PCR across the segment spanning exactly LoopDurTicks.

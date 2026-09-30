@@ -58,6 +58,8 @@ func codecFromStreamType(st uint8) Codec {
 		return CODEC_AVC
 	case psi.PmtStreamTypeMpeg4VideoH265:
 		return CODEC_HEVC
+	case psi.PmtStreamTypeMpeg2VideoH262:
+		return CODEC_MPEG2V
 	case psi.PmtStreamTypeAac:
 		return CODEC_AAC
 	case psi.PmtStreamTypeAc3:
