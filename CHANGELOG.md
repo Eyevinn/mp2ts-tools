@@ -10,11 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - New `mp2ts-loop` tool to loop a single-program TS seamlessly and forever
-  - Scans for the longest loop bounded by a video random-access point (IDR, or CRA for open-GOP HEVC)
+  - Scans for the longest loop bounded by a video random-access point (IDR, CRA for open-GOP HEVC, or an MPEG-2 I picture with sequence header)
   - Constant video frame rate and GOP duration, drift-free audio matched to the loop duration, and a regenerated linear PCR for constant-rate streams
-  - Open-GOP (CRA) loop points are marked BLA so the seam decodes cleanly (leading RASL pictures are discarded by the decoder)
-  - Supports H.264/H.265 video and AAC/MP2/AC-3 audio; passes through and per-wrap timestamp-shifts other PIDs such as SMPTE-2038 ANC data
+  - Open-GOP loop points are marked at the seam: HEVC CRA becomes BLA so the seam decodes cleanly; MPEG-2 gets `broken_link`
+  - Supports H.264/H.265/MPEG-2 video and AAC/MP2/AC-3 audio; passes through and per-wrap timestamp-shifts other PIDs such as SMPTE-2038 ANC data
   - Output to a file (`-o`, bounded by `-m`) or UDP unicast/multicast (`-a`); `-scan` prints the loop-point analysis as JSON
+- mp2ts-info now lists MPEG-2 video PIDs
 - mp2ts-nallister now prints per-picture POC (`pic_order_cnt_lsb`) and slice QP (initial SliceQPY) for AVC and HEVC, parsed from the first slice (segment) of each picture
 
 ### Changed

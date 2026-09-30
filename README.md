@@ -98,17 +98,20 @@ mp2ts-timeshift -offset -9000000 input.ts > output.ts
 
 `mp2ts-loop` loops a single-program transport stream seamlessly and forever. It
 scans the input for the longest loop bounded by a video random-access point (an
-IDR picture, or a CRA for open-GOP HEVC), keeps the video at a constant frame
-rate and constant GOP duration, matches the audio to the loop duration with no
-accumulated drift, and regenerates a perfect linear PCR for a constant-rate
-stream. For open-GOP (CRA) streams the loop-point picture is marked BLA so the
-seam decodes cleanly. Non-audio/video PIDs such as SMPTE-2038 ANC data are passed
+IDR picture, a CRA for open-GOP HEVC, or an MPEG-2 I picture with a sequence
+header), keeps the video at a constant frame rate and constant GOP duration,
+matches the audio to the loop duration with no accumulated drift, and regenerates
+a perfect linear PCR for a constant-rate stream. For open-GOP HEVC (CRA) streams
+the loop-point picture is marked BLA so the seam decodes cleanly. For open-GOP
+MPEG-2 streams the loop-point GOP is marked `broken_link`; the B-pictures leading
+each seam still predict from the previous wrap's tail, so closed GOPs are needed
+for a pixel-perfect seam. Non-audio/video PIDs such as SMPTE-2038 ANC data are passed
 through and timestamp-shifted per wrap. The output can be written to a file or
 sent over UDP (unicast or multicast).
 
 The input must be a seekable file (stdin is not supported, since it is read more
-than once). Supported video is H.264 and H.265; supported audio is AAC, MP2, and
-AC-3. Ultra-low-latency / gradual-decoder-refresh streams (no IDR/CRA) cannot be
+than once). Supported video is H.264, H.265, and MPEG-2; supported audio is AAC,
+MP2, and AC-3. Ultra-low-latency / gradual-decoder-refresh streams (no IDR/CRA) cannot be
 looped and are reported as such.
 
 **Options:**

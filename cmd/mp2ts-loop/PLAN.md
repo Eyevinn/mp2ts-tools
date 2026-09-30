@@ -3,7 +3,8 @@
 `mp2ts-loop` takes a single-program MPEG-2 TS file and **loops it seamlessly forever**:
 
 - Video kept at **constant frame rate** and **constant GOP duration**.
-- Loop seam is at an **IDR** picture, or a **CRA** when the stream has no IDR.
+- Loop seam is at an **IDR** picture, or a **CRA** when the stream has no IDR (for MPEG-2
+  video: an I picture after a sequence header, closed GOP preferred).
 - Audio matched to the **average** loop duration with **no accumulated drift** (a small
   sub-frame shift per loop is allowed).
 - **Perfect PCR** for a constant-rate TS.
@@ -85,6 +86,26 @@ periodically. So **loop-point eligibility is a pluggable policy**, never hardwir
 - The per-picture scan record therefore carries: NAL-type set, `isIDR`/`isCRA`/`isRAP`,
   `hasRecoverySEI`, field parity, and whether VPS/SPS/PPS are present or recently seen — so
   PREPARE can re-insert parameter sets at the chosen seam (needed for CRA today, GDR later).
+
+## MPEG-2 video (H.262)
+
+Parsed from start codes (`internal/mpeg2video.go`), no NAL layer. A loop point is an I picture
+preceded by a sequence header (the 13818-1 random-access definition). Its GOP maps onto the
+existing classes, so the selection ladder is shared:
+- **closed** (`IsIDR`, label `I-closed`): `closed_gop=1`, or `closed_gop=0` but the next coded
+  picture is not a B-picture (no leading pictures; promoted after the next PES is scanned).
+- **open** (`IsCRA`, label `I-open`): leading B-pictures predict from the previous GOP. At the
+  seam that is the previous wrap's tail, so they decode without errors but with wrong content.
+  The loop-point GOP gets `broken_link=1` (the 13818-2 edit marker, the analog of CRA→BLA), and
+  the plan warns. ffmpeg ignores `broken_link`; there is no pixel-perfect open-GOP seam without
+  re-encoding.
+- A class needs two points: encoders that close only their first GOP fall through to open.
+
+Validated on ffmpeg encodes (576p25/1080i25 open GOP + MP2, 720p29.97 closed GOP + AC-3, 720p50
+without B-frames + AAC): CC 0, exact PTS grid across seams, ffmpeg decode clean. Interlaced
+frame pictures (`+ilme+ildct`, constant top_field_first) loop like progressive; field pictures,
+repeat_first_field / pulldown, and parity continuity belong to the interlace work
+(extensibility requirement 2).
 
 ## Core types / interfaces (the extensibility seams)
 

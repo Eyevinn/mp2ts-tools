@@ -8,10 +8,10 @@ import (
 // RAPInfo describes the random-access properties of a coded picture (or field),
 // determined from its first VCL (slice) NAL unit.
 type RAPInfo struct {
-	IsVCL  bool // a VCL (slice) NAL unit was found
-	IsIDR  bool // AVC IDR, or HEVC IDR_W_RADL / IDR_N_LP
-	IsCRA  bool // HEVC CRA (open-GOP random access)
-	IsRAP  bool // any IRAP: IDR, CRA, or BLA
+	IsVCL  bool // a VCL (slice) NAL unit, or an MPEG-2 picture header, was found
+	IsIDR  bool // AVC IDR, HEVC IDR_W_RADL / IDR_N_LP, or MPEG-2 closed-GOP I picture
+	IsCRA  bool // HEVC CRA, or MPEG-2 open-GOP I picture (open-GOP random access)
+	IsRAP  bool // any IRAP: IDR, CRA, or BLA; for MPEG-2 an I picture after a sequence header
 	IsRASL bool // HEVC RASL leading picture (undecodable after a CRA splice)
 }
 
@@ -19,6 +19,9 @@ type RAPInfo struct {
 // random-access properties of the first VCL (slice) NAL unit. Non-VCL NAL units
 // (parameter sets, SEI, AUD) are skipped.
 func ScanRAP(codec Codec, data []byte) RAPInfo {
+	if codec == CODEC_MPEG2V {
+		return scanMPEG2AU(data).RAPInfo
+	}
 	n := len(data)
 	for i := 0; i < n-3; i++ {
 		if data[i] == 0 && data[i+1] == 0 && data[i+2] == 1 {
@@ -68,16 +71,22 @@ func IsIDRImage(codec Codec, data []byte) bool {
 // first slice plus which parameter sets it carries.
 type AUInfo struct {
 	RAPInfo
-	HasVPS bool // HEVC only
-	HasSPS bool
-	HasPPS bool
+	HasVPS  bool // HEVC only
+	HasSPS  bool // SPS, or the MPEG-2 sequence header
+	HasPPS  bool
+	PicType byte        // MPEG-2 only: picture_coding_type of the first picture
+	Field   FieldParity // MPEG-2 only: a frame (or field pair), or a lone field picture
 }
 
 // PSComplete reports whether the access unit carries the parameter sets a
-// decoder needs to start here (VPS+SPS+PPS for HEVC, SPS+PPS for AVC).
+// decoder needs to start here (VPS+SPS+PPS for HEVC, SPS+PPS for AVC, the
+// sequence header for MPEG-2).
 func (au AUInfo) PSComplete(codec Codec) bool {
-	if codec == CODEC_HEVC {
+	switch codec {
+	case CODEC_HEVC:
 		return au.HasVPS && au.HasSPS && au.HasPPS
+	case CODEC_MPEG2V:
+		return au.HasSPS
 	}
 	return au.HasSPS && au.HasPPS
 }
@@ -87,6 +96,9 @@ func (au AUInfo) PSComplete(codec Codec) bool {
 // Parameter sets always precede the first slice in a well-formed access unit, so
 // scanning stops at the first VCL NAL.
 func ScanAU(codec Codec, data []byte) AUInfo {
+	if codec == CODEC_MPEG2V {
+		return scanMPEG2AU(data)
+	}
 	var au AUInfo
 	n := len(data)
 	for i := 0; i < n-3; i++ {
