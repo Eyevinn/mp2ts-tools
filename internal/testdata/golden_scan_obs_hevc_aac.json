@@ -49,6 +49,7 @@
   "loop": {
     "loopPointType": "IDR",
     "numGops": 1,
+    "frames": 30,
     "startPktNr": 3,
     "endPktNr": 292,
     "startPTS": 1920,

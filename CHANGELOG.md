@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - New `mp2ts-loop` tool to loop a single-program TS seamlessly and forever
   - Scans for the longest loop bounded by a video random-access point (IDR, CRA for open-GOP HEVC, or an MPEG-2 I picture with sequence header)
-  - Constant video frame rate and GOP duration, drift-free audio matched to the loop duration, and a regenerated linear PCR for constant-rate streams
+  - Constant video frame rate and GOP duration, a loop of whole frame periods (even frame count at 59.94 fps), drift-free audio shifted per wrap by less than one audio frame, and a regenerated linear PCR for constant-rate streams
   - Open-GOP loop points are marked at the seam: HEVC CRA becomes BLA so the seam decodes cleanly; MPEG-2 gets `broken_link`
   - Supports H.264/H.265/MPEG-2 video and AAC/MP2/AC-3 audio; passes through and per-wrap timestamp-shifts other PIDs such as SMPTE-2038 ANC data
   - Output to a file (`-o`, bounded by `-m`) or UDP unicast/multicast (`-a`); `-scan` prints the loop-point analysis as JSON

@@ -24,9 +24,10 @@ var usg = `Usage of %s:
 It scans the input for the longest loop bounded by a video random-access point
 (an IDR picture, a CRA when the stream has no IDR, or an MPEG-2 I picture with a
 sequence header), keeping the video at a constant frame rate and constant GOP
-duration. Audio is matched to the average
-loop duration with no accumulated drift, and PCR is kept perfect for a
-constant-rate TS. The output can be written to a file or sent over UDP.
+duration. The loop is a whole number of frame periods (an even frame count at
+59.94 fps). Audio is matched to the average loop duration with no accumulated
+drift, shifted per wrap by less than one audio frame, and PCR is kept perfect
+for a constant-rate TS. The output can be written to a file or sent over UDP.
 
 The input must be a seekable file (stdin is not supported, since the tool reads
 it more than once), and every audio and video PES must carry a PTS. The supported codecs are H.264, H.265, and MPEG-2 video and

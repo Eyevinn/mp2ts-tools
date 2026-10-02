@@ -66,7 +66,15 @@ Per-frame tick step is not constant for 59.94 (1501.5), 23.976 (3753.75), etc.; 
   NOT `min == max`.
 - The loop length in ticks must be an **integer**; choose `F` frames where
   `F * 90000 * den / num` is integer (e.g. 59.94 ⇒ `F` even; 23.976 ⇒ `F` multiple of 4).
+  **Done (2026-10-02):** `selectLoop` prefers the longest exact loop (rate from `-fps` or the
+  DTS step) and warns if none exists; `LoopPlan.Frames` reports `F`.
 - Frame period is represented as a rational `{num, den}`, never a single int.
+- Audio: the per-wrap shift (`audioWrapState.deltaPTS`) stays in `[0, frameDur)`, so it is always
+  less than one audio frame and never accumulates; the audio cadence is continuous across seams.
+- Validated 2026-10-02 (29.97/59.94/23.976 × AAC/MP2/AC-3, 200 wraps): audio shift < 1 frame for
+  every wrap; video PTS/DTS keep the source's exact rational-grid dither across seams. One caveat
+  comes from the source: an encoder's first GOP can carry a start-up DTS quirk (x264: 1 tick),
+  which a loop starting there replays every wrap. Real captures do not start at the encoder start.
 
 ### 2. Interlace / field-coded video (esp. HEVC, one field per PES)
 For field-coded HEVC each **field** is its own access unit / PES — so `1 PES = 1 field`.

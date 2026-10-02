@@ -101,7 +101,11 @@ scans the input for the longest loop bounded by a video random-access point (an
 IDR picture, a CRA for open-GOP HEVC, or an MPEG-2 I picture with a sequence
 header), keeps the video at a constant frame rate and constant GOP duration,
 matches the audio to the loop duration with no accumulated drift, and regenerates
-a perfect linear PCR for a constant-rate stream. For open-GOP HEVC (CRA) streams
+a perfect linear PCR for a constant-rate stream. The loop is a whole number of
+frame periods (an even frame count at 59.94 fps, a multiple of four at 23.976),
+so the video timestamps continue exactly across the seam. When the loop is not a
+whole number of audio frames, the audio is shifted per wrap by less than one
+audio frame. For open-GOP HEVC (CRA) streams
 the loop-point picture is marked BLA so the seam decodes cleanly. For open-GOP
 MPEG-2 streams the loop-point GOP is marked `broken_link`; the B-pictures leading
 each seam still predict from the previous wrap's tail, so closed GOPs are needed

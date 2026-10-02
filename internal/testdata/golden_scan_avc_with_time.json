@@ -30,6 +30,7 @@
   "loop": {
     "loopPointType": "none",
     "numGops": 0,
+    "frames": 0,
     "startPktNr": 0,
     "endPktNr": 0,
     "startPTS": 0,

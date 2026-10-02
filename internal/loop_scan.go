@@ -292,7 +292,7 @@ func Scan(ctx context.Context, path string, fpsNum, fpsDen, durCapMS int) (*Scan
 		return rep, nil
 	}
 	bitrate, cbr := loopBitrate(ts)
-	rep.Loop = selectLoop(vid, auds, durCapMS, ts.PCRPid, bitrate, cbr)
+	rep.Loop = selectLoop(vid, auds, fpsNum, fpsDen, durCapMS, ts.PCRPid, bitrate, cbr)
 	return rep, nil
 }
 
@@ -409,33 +409,47 @@ func minMax(vals []int64) (int64, int64) {
 	return mn, mx
 }
 
-// classifyFrameRateLabel maps a measured average DTS step (90 kHz ticks) to a
-// frame-rate label, including the fractional NTSC-derived rates.
-func classifyFrameRateLabel(avgStep int64) string {
-	table := []struct {
-		label string
-		step  int64
-	}{
-		{"23.976", 3754}, {"24", 3750}, {"25", 3600}, {"29.97", 3003},
-		{"30", 3000}, {"50", 1800}, {"59.94", 1501}, {"60", 1500},
-	}
-	best, bestDiff := "", int64(1)<<62
-	for _, f := range table {
+// nominalFrameRates are the frame rates the scan recognizes: label, exact
+// rational rate num/den, and the DTS step (90 kHz ticks, rounded) they show as.
+var nominalFrameRates = []struct {
+	label    string
+	num, den int
+	step     int64
+}{
+	{"23.976", 24000, 1001, 3754}, {"24", 24, 1, 3750}, {"25", 25, 1, 3600},
+	{"29.97", 30000, 1001, 3003}, {"30", 30, 1, 3000}, {"50", 50, 1, 1800},
+	{"59.94", 60000, 1001, 1501}, {"60", 60, 1, 1500},
+}
+
+// nominalFrameRate returns the index in nominalFrameRates closest to a measured
+// average DTS step, or -1 if none is within 15 ticks.
+func nominalFrameRate(avgStep int64) int {
+	best, bestDiff := -1, int64(1)<<62
+	for i, f := range nominalFrameRates {
 		d := avgStep - f.step
 		if d < 0 {
 			d = -d
 		}
 		if d < bestDiff {
-			best, bestDiff = f.label, d
+			best, bestDiff = i, d
 		}
 	}
 	if bestDiff > 15 || avgStep == 0 {
-		if avgStep == 0 {
-			return "unknown"
-		}
-		return fmt.Sprintf("~%.3f", 90000.0/float64(avgStep))
+		return -1
 	}
 	return best
+}
+
+// classifyFrameRateLabel maps a measured average DTS step (90 kHz ticks) to a
+// frame-rate label, including the fractional NTSC-derived rates.
+func classifyFrameRateLabel(avgStep int64) string {
+	if i := nominalFrameRate(avgStep); i >= 0 {
+		return nominalFrameRates[i].label
+	}
+	if avgStep == 0 {
+		return "unknown"
+	}
+	return fmt.Sprintf("~%.3f", 90000.0/float64(avgStep))
 }
 
 func frLabel(num, den int) string {
