@@ -3,6 +3,9 @@ package internal
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -92,7 +95,7 @@ func TestResolveMPEG2Leading(t *testing.T) {
 	for _, c := range cases {
 		st := &scanTrack{codec: CODEC_MPEG2V, mediaType: "video"}
 		for i, d := range c.aus {
-			if err := st.HandlePES(&PESData{PTS: int64(i) * 3600, Data: d}, false); err != nil {
+			if err := st.HandlePES(&PESData{PTS: int64(i) * 3600, HasPTS: true, Data: d}, false); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -202,5 +205,44 @@ func TestPrepareLoopMPEG2OpenGOP(t *testing.T) {
 	}
 	if b3 := buf[k+7]; b3&mpeg2ClosedGOPBit != 0 || b3&mpeg2BrokenLinkBit == 0 {
 		t.Errorf("GOP flags byte 0x%02x: want open GOP with broken_link", b3)
+	}
+}
+
+// TestRefuseLoopWithoutPTS clears the PTS of one mid-stream video or audio PES in
+// a copy of the MPEG-2 fixture: the scan must report it and PrepareLoop refuse it.
+func TestRefuseLoopWithoutPTS(t *testing.T) {
+	src, err := os.ReadFile("testdata/mpeg2_open_mp2.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pid := range []int{256, 257} {
+		data := append([]byte(nil), src...)
+		// Clear PTS_DTS_flags of the third PES start on pid; header_data_length is
+		// kept, so the old timestamp bytes become header stuffing.
+		starts := 0
+		for i := 0; i+PacketSize <= len(data); i += PacketSize {
+			b := data[i : i+PacketSize]
+			if tsPID(b) != pid || !tsPUSI(b) {
+				continue
+			}
+			if starts++; starts == 3 {
+				b[tsPayloadOffset(b)+7] &^= 0xc0
+				break
+			}
+		}
+		path := filepath.Join(t.TempDir(), "nopts.ts")
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rep, err := Scan(context.TODO(), path, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rep.Loop != nil || !strings.Contains(rep.Note, "without a PTS") {
+			t.Errorf("pid %d: scan loop=%v note=%q, want refusal", pid, rep.Loop, rep.Note)
+		}
+		if _, _, err := PrepareLoop(context.TODO(), path, 0, 0, 0); err == nil || !strings.Contains(err.Error(), "without a PTS") {
+			t.Errorf("pid %d: PrepareLoop err=%v, want refusal", pid, err)
+		}
 	}
 }

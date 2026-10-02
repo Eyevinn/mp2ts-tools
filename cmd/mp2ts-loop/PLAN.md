@@ -119,12 +119,13 @@ across seams):**
   (x264 `tff=1`). These are frame pictures, so they loop like progressive.
 - HEVC field coding from x265 `interlace=tff` (one field per PES, pic_timing `pic_struct` 1/2),
   but only by luck: x265 puts every IDR on a top field every 50 fields. The report calls it
-  50 fps frames.
+  50 fps frames. ffmpeg's HEVC interlace support is weak (FFmpeg PR #23616), so this is not a
+  reliable check.
 
 **Shared infrastructure (all codecs):**
-1. `PESData` has no has-PTS flag; a PES without PTS reads as PTS 0. Field-per-PES streams may
-   omit PTS on the second field, which breaks DTS steps, the loop window, and the MPEG-2
-   leading-B check. Track `HasPTS` and derive/skip as needed.
+1. Every audio and video PES must carry a PTS (decided 2026-10-02; done). The scan counts PES
+   without one (`pesWithoutPTS` in the report) and refuses to loop, so field-per-PES streams
+   that omit the second field's PTS are out of scope.
 2. Per-picture field parity (top/bottom/frame) plus pairing: one PES may hold a field pair (AVC
    PAFF, MPEG-2 field pictures), or one field (HEVC, some PAFF muxes).
 3. Fold fields into frames for frame rate, GOP, and report (`field`: progressive / interlaced
@@ -152,7 +153,8 @@ The ffmpeg encoder cannot make field pictures, so field-picture MPEG-2 needs a b
   non-IDR I pictures with a recovery_point SEI (`recovery_frame_cnt=0`). The seam marker is the
   SEI's `broken_link_flag` (the analog of MPEG-2 `broken_link` and HEVC CRA→BLA).
 
-**HEVC — field coding** (`field_seq_flag=1`, most complex): no interlace coding tools; each field
+**HEVC — field coding** (`field_seq_flag=1`, most complex; **on hold until example files are
+provided**, since ffmpeg/x265 cannot be trusted for HEVC interlace): no interlace coding tools; each field
 is a picture/AU (usually one PES). Parity comes from the pic_timing SEI `pic_struct` (1/2, or 9–12
 paired with the previous/next field). It needs VUI `frame_field_info_present_flag`, and mp4ff
 already parses `FrameFieldInfo`. Work items:
@@ -161,17 +163,18 @@ already parses `FrameFieldInfo`. Work items:
   AU. `rewriteSeamCRAtoBLA` only patches the first AU, so it must patch both. RASL leading fields
   are dropped at the BLA as before.
 - Frame-coded interlaced HEVC (`field_seq_flag=0`, `pic_struct` 3/4) loops like progressive.
-- Test content: x265 `interlace=tff` + `separatefields` (IDR/CRA field streams, keyint in fields;
-  odd keyint forces bottom-field IRAPs). The GDR caps (`cap_*_i25`) also need the GDR policy.
+- Test content: example files from the user (pending). x265 `interlace=tff` + `separatefields`
+  only for quick experiments (odd keyint in fields forces bottom-field IRAPs). The GDR caps
+  (`cap_*_i25`) also need the GDR policy.
 
 **Pulldown / repeat-field** (MPEG-2 `repeat_first_field`, AVC/HEVC `pic_struct` 5–8): coded
 frame cadence ≠ display cadence, so DTS steps alternate (e.g. 3003/4504) and the constant-rate
 check fails. The loop must hold whole pulldown cycles and continue the TFF/RFF pattern.
 Initially detect and warn/refuse.
 
-**Order:** shared infrastructure (1–4) → MBAFF + MPEG-2 frame-picture parity checks (testable
-now) → HEVC field coding (testable with x265) → PAFF and MPEG-2 field pictures (need captures)
-→ pulldown.
+**Order:** shared infrastructure (2–4) → MBAFF + MPEG-2 frame-picture parity checks (testable
+now) → PAFF and MPEG-2 field pictures (need captures) → HEVC field coding (when example files
+arrive) → pulldown.
 
 ## Core types / interfaces (the extensibility seams)
 

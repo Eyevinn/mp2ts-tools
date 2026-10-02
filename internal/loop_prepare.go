@@ -51,6 +51,9 @@ func PrepareLoop(ctx context.Context, path string, fpsNum, fpsDen, durCapMS int)
 	if vid == nil {
 		return nil, nil, fmt.Errorf("no video elementary stream found")
 	}
+	if err := requirePTS(vid, auds); err != nil {
+		return nil, nil, err
+	}
 	bitrate, cbr := loopBitrate(ts)
 	plan := selectLoop(vid, auds, durCapMS, ts.PCRPid, bitrate, cbr)
 	if plan == nil || plan.LoopPointType == "none" || plan.NumGOPs < 1 {
