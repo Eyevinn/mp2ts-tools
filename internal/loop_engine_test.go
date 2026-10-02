@@ -127,7 +127,7 @@ func TestSelectLoop(t *testing.T) {
 	}
 
 	// Longest loop.
-	p := selectLoop(vid, []*scanTrack{aud}, 0, 256, 15_000_000, true)
+	p := selectLoop(vid, []*scanTrack{aud}, 0, 0, 0, 256, 15_000_000, true)
 	if p == nil || p.NumGOPs != 3 || p.LoopDurTicks != 270000 || p.StartPTS != 0 || p.EndPTS != 270000 {
 		t.Fatalf("longest loop: %+v", p)
 	}
@@ -142,9 +142,42 @@ func TestSelectLoop(t *testing.T) {
 	}
 
 	// Duration cap to two GOPs.
-	p2 := selectLoop(vid, []*scanTrack{aud}, 2000, 256, 15_000_000, true)
+	p2 := selectLoop(vid, []*scanTrack{aud}, 0, 0, 2000, 256, 15_000_000, true)
 	if p2.NumGOPs != 2 || p2.LoopDurTicks != 180000 {
 		t.Errorf("capped loop: numGops=%d dur=%d", p2.NumGOPs, p2.LoopDurTicks)
+	}
+}
+
+// TestSelectLoopWholeFrames checks that at 59.94 fps (1501.5 ticks per frame)
+// with an odd GOP length, the loop uses an even number of GOPs so its duration is
+// a whole number of frame periods, and that an inexact loop is used (with a
+// warning) only when no exact one exists.
+func TestSelectLoopWholeFrames(t *testing.T) {
+	mkVideo := func(gop, gops int) *scanTrack {
+		vid := &scanTrack{pid: 256, codec: CODEC_AVC, mediaType: "video"}
+		for n := 0; n <= gop*gops; n++ {
+			ts := (int64(n)*3003 + 1) / 2 // round(n * 1501.5): 1501/1502 dither
+			vid.pics = append(vid.pics, PicRecord{
+				PTS: ts, DTS: ts, StartPktNr: uint32(n) * 10, IsIDR: n%gop == 0, IsRAP: n%gop == 0,
+				PSPresent: true, Field: FieldFrame,
+			})
+		}
+		return vid
+	}
+
+	p := selectLoop(mkVideo(15, 7), nil, 0, 0, 0, 256, 0, false)
+	if p.NumGOPs != 6 || p.Frames != 90 || p.LoopDurTicks != 90*3003/2 || len(p.Warnings) != 0 {
+		t.Errorf("odd GOP: got %d GOPs, %d frames, %d ticks, warnings %v; want 6 GOPs, 90 frames, %d ticks",
+			p.NumGOPs, p.Frames, p.LoopDurTicks, p.Warnings, 90*3003/2)
+	}
+	// The same with the frame-rate hint.
+	if p := selectLoop(mkVideo(15, 7), nil, 60000, 1001, 0, 256, 0, false); p.NumGOPs != 6 {
+		t.Errorf("odd GOP with -fps hint: got %d GOPs, want 6", p.NumGOPs)
+	}
+	// One GOP of 15 frames is the only loop: inexact, kept with a warning.
+	p = selectLoop(mkVideo(15, 1), nil, 0, 0, 0, 256, 0, false)
+	if p.NumGOPs != 1 || p.Frames != 15 || len(p.Warnings) != 1 {
+		t.Errorf("single odd GOP: got %d GOPs, %d frames, warnings %v", p.NumGOPs, p.Frames, p.Warnings)
 	}
 }
 

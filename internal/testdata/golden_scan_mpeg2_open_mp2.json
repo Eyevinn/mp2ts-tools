@@ -49,6 +49,7 @@
   "loop": {
     "loopPointType": "I-open",
     "numGops": 3,
+    "frames": 36,
     "startPktNr": 252,
     "endPktNr": 626,
     "startPTS": 172800,

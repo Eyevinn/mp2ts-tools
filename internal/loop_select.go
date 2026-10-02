@@ -1,6 +1,9 @@
 package internal
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 // LoopAudio describes how one audio elementary stream fits the chosen loop.
 type LoopAudio struct {
@@ -28,6 +31,7 @@ type LoopPCR struct {
 type LoopPlan struct {
 	LoopPointType string      `json:"loopPointType"`
 	NumGOPs       int         `json:"numGops"`
+	Frames        int         `json:"frames"` // coded pictures in the loop
 	StartPktNr    uint32      `json:"startPktNr"`
 	EndPktNr      uint32      `json:"endPktNr"` // exclusive: first packet of the end loop-point AU
 	StartPTS      int64       `json:"startPTS"`
@@ -89,9 +93,16 @@ func loopPointClass(codec Codec, pics []PicRecord) (string, func(PicRecord) bool
 	return loopPointNone, func(PicRecord) bool { return false }
 }
 
-// selectLoop chooses the longest loop (or the longest within durCapMS) ending on
-// an eligible loop point, and computes the audio fit and PCR/stuffing budget.
-func selectLoop(vid *scanTrack, audios []*scanTrack, durCapMS, pcrPid int, bitrate int64, cbr bool) *LoopPlan {
+// selectLoop chooses the longest loop (or the longest within durCapMS) between two
+// eligible loop points, and computes the audio fit and PCR/stuffing budget.
+// fpsNum/fpsDen is an optional frame-rate hint (0 = detect from the DTS steps).
+//
+// A perfect loop is a whole number of nominal frame periods. At 59.94 fps a frame
+// is 1501.5 ticks, so only an even frame count gives an integer duration; at
+// 23.976 (3753.75 ticks) the count must be a multiple of four. Any other loop is
+// up to half a tick off the nominal rate, and the source's 1501/1502 timestamp
+// dither breaks at every seam. Such loops are used only if no exact one exists.
+func selectLoop(vid *scanTrack, audios []*scanTrack, fpsNum, fpsDen, durCapMS, pcrPid int, bitrate int64, cbr bool) *LoopPlan {
 	if vid == nil || len(vid.pics) == 0 {
 		return nil
 	}
@@ -102,11 +113,12 @@ func selectLoop(vid *scanTrack, audios []*scanTrack, durCapMS, pcrPid int, bitra
 		pts int64
 		pkt uint32
 		ps  bool
+		idx int // index in vid.pics (decode order)
 	}
 	var elig []point
-	for _, p := range vid.pics {
+	for i, p := range vid.pics {
 		if eligible(p) {
-			elig = append(elig, point{p.PTS, p.StartPktNr, p.PSPresent})
+			elig = append(elig, point{p.PTS, p.StartPktNr, p.PSPresent, i})
 		}
 	}
 
@@ -117,31 +129,62 @@ func selectLoop(vid *scanTrack, audios []*scanTrack, durCapMS, pcrPid int, bitra
 	}
 	sort.Slice(elig, func(i, j int) bool { return elig[i].pts < elig[j].pts })
 
-	start := elig[0]
-	endIdx := len(elig) - 1
-	if durCapMS > 0 {
-		capTicks := int64(durCapMS) * 90
-		endIdx = 0
-		for i := 1; i < len(elig); i++ {
-			if elig[i].pts-start.pts <= capTicks {
-				endIdx = i
-			} else {
-				break
-			}
+	num, den := fpsNum, fpsDen
+	if num <= 0 || den <= 0 {
+		num, den = 0, 0
+		dts := make([]int64, len(vid.pics))
+		for i, p := range vid.pics {
+			dts[i] = p.DTS
 		}
-		if endIdx == 0 {
-			plan.Warnings = append(plan.Warnings, "duration cap is shorter than one GOP; using one GOP")
-			endIdx = 1
+		if i := nominalFrameRate(statOf(CalculateSteps(dts)).Avg); i >= 0 {
+			num, den = nominalFrameRates[i].num, nominalFrameRates[i].den
 		}
 	}
-	end := elig[endIdx]
+	// offNominal is how far (in ticks, times num) a loop of the given duration and
+	// frame count is from a whole number of nominal frame periods.
+	offNominal := func(dur int64, frames int) int64 {
+		if num <= 0 {
+			return 0 // unknown rate: no constraint
+		}
+		return dur*int64(num) - int64(frames)*90000*int64(den)
+	}
+
+	// Pick the longest loop within the cap, preferring an exact one. Ties go to
+	// the earliest start.
+	capTicks := int64(durCapMS) * 90
+	si, ei, bestExact := -1, -1, false
+	for i := 0; i < len(elig); i++ {
+		for j := i + 1; j < len(elig); j++ {
+			dur := elig[j].pts - elig[i].pts
+			if durCapMS > 0 && dur > capTicks {
+				break
+			}
+			ex := offNominal(dur, elig[j].idx-elig[i].idx) == 0
+			if si < 0 || (ex && !bestExact) || (ex == bestExact && dur > elig[ei].pts-elig[si].pts) {
+				si, ei, bestExact = i, j, ex
+			}
+		}
+	}
+	if si < 0 {
+		plan.Warnings = append(plan.Warnings, "duration cap is shorter than one GOP; using one GOP")
+		si, ei = 0, 1
+		bestExact = offNominal(elig[1].pts-elig[0].pts, elig[1].idx-elig[0].idx) == 0
+	}
+	start, end := elig[si], elig[ei]
 
 	plan.StartPTS, plan.EndPTS = start.pts, end.pts
 	plan.StartPktNr, plan.EndPktNr = start.pkt, end.pkt
 	plan.LoopDurTicks = end.pts - start.pts
 	plan.LoopDurMS = float64(plan.LoopDurTicks) / 90.0
-	plan.NumGOPs = endIdx // eligible points are consecutive GOP boundaries
+	plan.NumGOPs = ei - si // eligible points are consecutive GOP boundaries
+	plan.Frames = end.idx - start.idx
 	plan.PSAtStart = start.ps
+	if !bestExact {
+		off := float64(offNominal(plan.LoopDurTicks, plan.Frames)) / float64(num)
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
+			"no loop is a whole number of %s frame periods; each wrap is %+.2f ticks off nominal",
+			frLabel(num, den), off))
+	}
 	if !start.ps {
 		plan.Warnings = append(plan.Warnings, "start loop point does not carry parameter sets; they must be inserted at the seam")
 	}
