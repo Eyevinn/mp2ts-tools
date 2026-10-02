@@ -18,8 +18,9 @@ type PESData struct {
 	PID           int
 	PTS           int64
 	DTS           int64
-	PayloadLength int // from the PES_packet_length header field (0 if unbounded)
-	AlignOffset   int // bytes at the start belonging to a frame begun in the previous PES
+	HasPTS        bool // the PES header carries a PTS (PTS and DTS are 0 otherwise)
+	PayloadLength int  // from the PES_packet_length header field (0 if unbounded)
+	AlignOffset   int  // bytes at the start belonging to a frame begun in the previous PES
 	Data          []byte
 	StartPktNr    uint32
 	PktLoss       bool
@@ -61,6 +62,7 @@ func (p *PESData) StartPES(pkt *packet.Packet, pktNr uint32) error {
 		p.PayloadLength = totPESLen - totPESHdrLen
 	}
 	if pesHdr.HasPTS() {
+		p.HasPTS = true
 		p.PTS = int64(pesHdr.PTS())
 		if pesHdr.HasDTS() {
 			p.DTS = int64(pesHdr.DTS())
@@ -79,6 +81,7 @@ func (p *PESData) Reset() {
 	}
 	p.PTS = 0
 	p.DTS = 0
+	p.HasPTS = false
 	p.PayloadLength = 0
 	p.AlignOffset = 0
 	p.Data = p.Data[:0]

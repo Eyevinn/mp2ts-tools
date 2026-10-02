@@ -110,7 +110,7 @@ through and timestamp-shifted per wrap. The output can be written to a file or
 sent over UDP (unicast or multicast).
 
 The input must be a seekable file (stdin is not supported, since it is read more
-than once). Supported video is H.264, H.265, and MPEG-2; supported audio is AAC,
+than once), and every audio and video PES must carry a PTS. Supported video is H.264, H.265, and MPEG-2; supported audio is AAC,
 MP2, and AC-3. Ultra-low-latency / gradual-decoder-refresh streams (no IDR/CRA) cannot be
 looped and are reported as such.
 

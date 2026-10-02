@@ -69,6 +69,7 @@ type scanTrack struct {
 	frames     int         // total audio frames seen
 	nonAligned bool        // any audio frame straddles a PES boundary
 	splitErrs  int         // audio PES that failed to split
+	noPTS      int         // PES without a PTS; such streams are not looped
 
 	// MPEG-2 only: an open-GOP I picture (pics[openIdx]) waiting for the next
 	// coded picture to show whether it has leading B-pictures.
@@ -82,6 +83,10 @@ type scanTrack struct {
 func (s *scanTrack) HandlePES(p *PESData, last bool) error {
 	if last {
 		return nil // the final buffered PES may be truncated at EOF
+	}
+	if !p.HasPTS {
+		s.noPTS++ // counted and skipped: requirePTS refuses to loop the stream
+		return nil
 	}
 	switch s.mediaType {
 	case "video":
@@ -181,6 +186,7 @@ type VideoScan struct {
 	ConstantFrameRate bool   `json:"constantFrameRate"`
 	DTSStepTicks      Stat   `json:"dtsStepTicks"`
 	Field             string `json:"field"`
+	PESWithoutPTS     int    `json:"pesWithoutPTS,omitempty"`
 	LoopPointType     string `json:"loopPointType"` // IDR | CRA | RAP | I-closed | I-open | none
 	LoopPoints        int    `json:"loopPoints"`
 	GOPDurationTicks  Stat   `json:"gopDurationTicks"`
@@ -201,6 +207,7 @@ type AudioScan struct {
 	SampleRate    int    `json:"sampleRate"`
 	FrameDurTicks int64  `json:"frameDurTicks"`
 	NonPESAligned bool   `json:"nonPESAligned"`
+	PESWithoutPTS int    `json:"pesWithoutPTS,omitempty"`
 	PESStepTicks  Stat   `json:"pesStepTicks"`
 	FirstPTS      int64  `json:"firstPTS"`
 	LastPTS       int64  `json:"lastPTS"`
@@ -280,13 +287,31 @@ func Scan(ctx context.Context, path string, fpsNum, fpsDen, durCapMS int) (*Scan
 		rep.Audio = append(rep.Audio, analyzeAudio(a))
 	}
 	rep.PassThrough = ts.PassThrough
+	if err := requirePTS(vid, auds); err != nil {
+		rep.Note = "cannot loop: " + err.Error()
+		return rep, nil
+	}
 	bitrate, cbr := loopBitrate(ts)
 	rep.Loop = selectLoop(vid, auds, durCapMS, ts.PCRPid, bitrate, cbr)
 	return rep, nil
 }
 
+// requirePTS returns an error if any video or audio PES lacked a PTS. The loop
+// engine selects, trims, and shifts every PES by its PTS, so it does not loop
+// such streams.
+func requirePTS(vid *scanTrack, auds []*scanTrack) error {
+	for _, st := range append([]*scanTrack{vid}, auds...) {
+		if st != nil && st.noPTS > 0 {
+			return fmt.Errorf("%s PID %d has %d PES packets without a PTS; every audio and video PES must carry one",
+				st.mediaType, st.pid, st.noPTS)
+		}
+	}
+	return nil
+}
+
 func analyzeVideo(st *scanTrack, fpsNum, fpsDen int) *VideoScan {
-	v := &VideoScan{PID: st.pid, Codec: st.codec.String(), Pictures: len(st.pics), Field: "frame"}
+	v := &VideoScan{PID: st.pid, Codec: st.codec.String(), Pictures: len(st.pics), Field: "frame",
+		PESWithoutPTS: st.noPTS}
 	if len(st.pics) == 0 {
 		return v
 	}
@@ -331,7 +356,7 @@ func analyzeVideo(st *scanTrack, fpsNum, fpsDen int) *VideoScan {
 func analyzeAudio(st *scanTrack) *AudioScan {
 	a := &AudioScan{
 		PID: st.pid, Codec: st.codec.String(), PESCount: len(st.audio),
-		Frames: st.frames, NonPESAligned: st.nonAligned,
+		Frames: st.frames, NonPESAligned: st.nonAligned, PESWithoutPTS: st.noPTS,
 	}
 	if st.framer != nil {
 		a.SampleRate = st.framer.SampleRate()
