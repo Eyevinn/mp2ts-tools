@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Requires Go 1.24 or later, and uses mp4ff v0.58.0
 - mp2ts-pslister now always shows verbose parameter set info (removed `-ps` flag)
 - Parameter sets (SPS/PPS/VPS) are only printed when they change, avoiding duplicate output for AVC and HEVC
 - AVC PicTiming SEI output now includes all clock timestamp fields (ct_type, counting_type, n_frames, time, time_offset, etc.)

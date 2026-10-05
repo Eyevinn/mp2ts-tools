@@ -1,10 +1,10 @@
 module github.com/Eyevinn/mp2ts-tools
 
-go 1.19
+go 1.24
 
 require (
 	github.com/Comcast/gots/v2 v2.2.1
-	github.com/Eyevinn/mp4ff v0.50.0
+	github.com/Eyevinn/mp4ff v0.58.0
 	github.com/asticode/go-astits v1.13.0
 	github.com/stretchr/testify v1.8.4
 	golang.org/x/exp v0.0.0-20240119083558-1b970713d09a
