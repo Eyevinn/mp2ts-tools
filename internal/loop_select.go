@@ -41,7 +41,21 @@ type LoopPlan struct {
 	PSAtStart     bool        `json:"psAtStart"`
 	Audio         []LoopAudio `json:"audio,omitempty"`
 	PCR           *LoopPCR    `json:"pcr,omitempty"`
+	SCTE35        *LoopSCTE35 `json:"scte35,omitempty"`
 	Warnings      []string    `json:"warnings,omitempty"`
+}
+
+// packetWindow returns the source packets [start, end) the loop segment is cut
+// from: from the loop-point picture (or the first kept audio PES, if earlier) to
+// the end loop-point picture. Audio past the end is collected separately.
+func (p *LoopPlan) packetWindow() (start, end int) {
+	start = int(p.StartPktNr)
+	for _, a := range p.Audio {
+		if a.StartPTS >= 0 && int(a.StartPktNr) < start {
+			start = int(a.StartPktNr)
+		}
+	}
+	return start, int(p.EndPktNr)
 }
 
 // Loop-point classes, from cleanest to least clean. MPEG-2 has no IDR or CRA

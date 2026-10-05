@@ -48,6 +48,7 @@ type TSStream struct {
 	PassThrough        []PassThroughStream
 	totNrPkts          int
 	pcrSamples         []PCRSample
+	scte35             sectionAssembler // SCTE-35 sections seen by ProcessTSFile
 	ContinuityCounters *ContinuityCounters
 }
 
@@ -151,6 +152,7 @@ func (t *TSStream) ProcessTSFile(ctx context.Context, ifh io.ReadSeeker) error {
 		return err
 	}
 	t.totNrPkts = 0
+	t.scte35 = sectionAssembler{}
 	var pkt packet.Packet
 	pktNr := -1
 Loop:
@@ -183,6 +185,9 @@ Loop:
 			if pid == t.PCRPid {
 				t.pcrSamples = append(t.pcrSamples, PCRSample{PktNr: pktNr, PCR: pcr})
 			}
+		}
+		if pid == t.SCTE35Pid {
+			t.scte35.add(pkt[:], pktNr*PacketSize)
 		}
 		es, ok := t.ElStreams[pid]
 		if !ok || es.GetPESHandler() == nil {

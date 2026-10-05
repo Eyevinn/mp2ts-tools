@@ -26,7 +26,8 @@ type LoopSegment struct {
 	LoopDurTicks  int64
 	VideoPID      int
 	PCRPid        int
-	AudioStartPTS map[int]int64 // audio pid -> first audio frame PTS of the loop
+	AudioStartPTS map[int]int64  // audio pid -> first audio frame PTS of the loop
+	scte35        *scte35Patcher // re-stamps the kept SCTE-35 cues per wrap (nil if none)
 }
 
 // nullPacket returns a standard MPEG-TS null/stuffing packet (PID 8191).
@@ -56,6 +57,7 @@ func PrepareLoop(ctx context.Context, path string, fpsNum, fpsDen, durCapMS int)
 	}
 	bitrate, cbr := loopBitrate(ts)
 	plan := selectLoop(vid, auds, fpsNum, fpsDen, durCapMS, ts.PCRPid, bitrate, cbr)
+	planLoopSCTE35(ts, plan)
 	if plan == nil || plan.LoopPointType == "none" || plan.NumGOPs < 1 {
 		return nil, plan, fmt.Errorf("no loopable interval found (need at least two %s loop points)", plan.LoopPointType)
 	}
@@ -86,13 +88,7 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 		pcrPid = vpid
 	}
 	Vs := plan.StartPTS
-	startByte := int(plan.StartPktNr)
-	for _, a := range plan.Audio {
-		if a.StartPTS >= 0 && int(a.StartPktNr) < startByte {
-			startByte = int(a.StartPktNr)
-		}
-	}
-	endByte := int(plan.EndPktNr)
+	startByte, endByte := plan.packetWindow()
 
 	fh, err := os.Open(path)
 	if err != nil {
@@ -219,6 +215,9 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 		if pid == stuffingPID {
 			continue // drop original stuffing; we re-pad below
 		}
+		if pid == ts.SCTE35Pid && plan.SCTE35.dropped(pktNr) {
+			continue // a cue not fully inside the loop; re-padded like stuffing
+		}
 
 		if audioPIDs[pid] {
 			// Buffer the whole audio PES (across interleaved video) and process it
@@ -261,6 +260,11 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	seg := make([]byte, 0, len(videoOther)+2*PacketSize)
 	seg = append(seg, patPkt...)
 	seg = append(seg, pmtPkt...)
+	if plan.SCTE35 != nil {
+		for _, sec := range plan.SCTE35.inject { // cues sent before the loop, for times inside it
+			seg = append(seg, packetizeSection(ts.SCTE35Pid, sec)...)
+		}
+	}
 	for i := 0; i < videoCount; i++ {
 		if a := inserts[i]; len(a) > 0 {
 			seg = append(seg, a...)
@@ -307,6 +311,11 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	// Regenerate a linear PCR across the segment spanning exactly LoopDurTicks.
 	stampLinearPCR(data, plan.LoopDurTicks, n)
 
+	var scte *scte35Patcher
+	if plan.SCTE35 != nil && plan.SCTE35.Kept > 0 {
+		scte = newSCTE35Patcher(data, n, ts.SCTE35Pid, plan.SCTE35.EventIDStep)
+	}
+
 	return &LoopSegment{
 		Data:          data,
 		NumPackets:    n,
@@ -314,6 +323,7 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 		VideoPID:      vpid,
 		PCRPid:        pcrPid,
 		AudioStartPTS: audioStart,
+		scte35:        scte,
 	}, nil
 }
 
