@@ -3,6 +3,8 @@ package internal
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Comcast/gots/v2"
@@ -228,15 +230,68 @@ func TestSCTE35PatcherWrap(t *testing.T) {
 	}
 }
 
-// TestLoopSCTE35Fixture loops the bundled stream with an ad cue sent before the
-// loop start: the cue is moved into the loop and re-sent every wrap with its
-// time shifted by the loop duration and its event ID increased.
-func TestLoopSCTE35Fixture(t *testing.T) {
-	seg, plan, err := PrepareLoop(context.TODO(), "testdata/80s_with_ad.ts", 0, 0, 0)
+// injectSCTE35 copies a constant-rate fixture with an SCTE-35 PID added to its
+// PMT and each cue written into the first null packet at or after its packet.
+func injectSCTE35(t *testing.T, src string, pid int, cues map[int][]byte) string {
+	t.Helper()
+	data, err := os.ReadFile(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.SCTE35 == nil || plan.SCTE35.Kept != 1 || plan.SCTE35.Moved != 1 {
+	pmtPID := -1
+	for i := 0; i+PacketSize <= len(data) && pmtPID < 0; i += PacketSize {
+		if b := data[i : i+PacketSize]; tsPID(b) == 0 && tsPUSI(b) {
+			sec := b[5+int(b[4]):]
+			pmtPID = int(sec[10]&0x1f)<<8 | int(sec[11]) // first program's PMT PID
+		}
+	}
+	for i := 0; i+PacketSize <= len(data); i += PacketSize {
+		b := data[i : i+PacketSize]
+		if tsPID(b) != pmtPID || !tsPUSI(b) {
+			continue
+		}
+		o := tsPayloadOffset(b)
+		o += 1 + int(b[o]) // pointer_field
+		secLen := int(b[o+1]&0x0f)<<8 | int(b[o+2])
+		end := o + 3 + secLen - 4 // the CRC_32 starts here
+		entry := []byte{0x86, 0xe0 | byte(pid>>8), byte(pid), 0xf0, 0x00}
+		copy(b[end+len(entry):], b[end:end+4])
+		copy(b[end:], entry)
+		secLen += len(entry)
+		b[o+1], b[o+2] = b[o+1]&0xf0|byte(secLen>>8), byte(secLen)
+		copy(b[end+len(entry):], gots.ComputeCRC(b[o:end+len(entry)]))
+	}
+	for at, sec := range cues {
+		for i := at * PacketSize; i+PacketSize <= len(data); i += PacketSize {
+			if tsPID(data[i:]) == stuffingPID {
+				copy(data[i:], packetizeSection(pid, sec))
+				break
+			}
+		}
+	}
+	path := filepath.Join(t.TempDir(), "scte35.ts")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestLoopSCTE35 loops a constant-rate stream with cues: a break inside the loop
+// and a CUE-OUT/CUE-IN pair are re-sent every wrap with their time shifted by the
+// loop duration and their event IDs advanced; a break past the loop end is dropped.
+func TestLoopSCTE35(t *testing.T) {
+	const pid = 500
+	path := injectSCTE35(t, "testdata/mpeg2_open_mp2.ts", pid, map[int][]byte{
+		260: spliceInsert(10, true, 190_000, 30_000), // ends at 220000, inside the loop
+		300: spliceInsert(11, true, 280_000, 40_000), // ends after the loop (302400)
+		400: spliceInsert(12, true, 230_000, 0),
+		500: spliceInsert(12, false, 260_000, 0),
+	})
+	seg, plan, err := PrepareLoop(context.TODO(), path, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := plan.SCTE35; s == nil || s.Sections != 4 || s.Kept != 3 || s.EventIDStep != 3 {
 		t.Fatalf("SCTE-35 plan: %+v", plan.SCTE35)
 	}
 	var out bytes.Buffer
@@ -247,25 +302,33 @@ func TestLoopSCTE35Fixture(t *testing.T) {
 	b := out.Bytes()
 	var a sectionAssembler
 	for i := 0; i < len(b)/PacketSize; i++ {
-		if tsPID(b[i*PacketSize:]) == plan.SCTE35.PID {
+		if tsPID(b[i*PacketSize:]) == pid {
 			a.add(b[i*PacketSize:(i+1)*PacketSize], i*PacketSize)
 		}
 	}
-	if len(a.sections) != wraps {
-		t.Fatalf("got %d SCTE-35 sections in %d wraps", len(a.sections), wraps)
+	type cue struct {
+		id  uint32
+		pts int64
 	}
-	for w, s := range a.sections {
-		if got := s.firstPkt() - w*seg.NumPackets; got != 2 {
-			t.Errorf("wrap %d: cue in packet %d of the wrap, want 2 (after PAT and PMT)", w, got)
-		}
+	var got []cue
+	for _, s := range a.sections {
 		msg, err := scte35.NewSCTE35(append([]byte{0}, s.Data...))
 		if err != nil {
 			t.Fatal(err)
 		}
-		ins := msg.CommandInfo().(scte35.SpliceInsertCommand)
-		if ins.EventID() != 255+uint32(w) || int64(msg.PTS()) != 1_032_000+int64(w)*seg.LoopDurTicks {
-			t.Errorf("wrap %d: event %d at %d, want %d at %d", w, ins.EventID(), msg.PTS(),
-				255+w, 1_032_000+int64(w)*seg.LoopDurTicks)
+		got = append(got, cue{msg.CommandInfo().(scte35.SpliceInsertCommand).EventID(), int64(msg.PTS())})
+	}
+	var want []cue
+	for w := int64(0); w < wraps; w++ {
+		want = append(want, cue{10 + 3*uint32(w), 190_000 + w*seg.LoopDurTicks},
+			cue{12 + 3*uint32(w), 230_000 + w*seg.LoopDurTicks}, cue{12 + 3*uint32(w), 260_000 + w*seg.LoopDurTicks})
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got cues %v, want %v", got, want)
+	}
+	for k := range want {
+		if got[k] != want[k] {
+			t.Errorf("cue %d: %+v, want %+v", k, got[k], want[k])
 		}
 	}
 }

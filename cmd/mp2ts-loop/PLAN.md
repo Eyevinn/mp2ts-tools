@@ -257,11 +257,13 @@ decoder buffer delay between the two loop points (`stuffingDelta`); free slots a
 end of the window, or nulls added before the seam, so packets just before the seam move by that
 much. Measured per PES on captures: 0 ms change for most of the wrap, up to 80-113 ms at the seam.
 
+**VBR sources are refused** (decided 2026-10-05): `constantRate: false` from the PCR (intervals
+between PCRs within 0.5%; each stretch between signalled discontinuities on its own), e.g. football
+and three of the four bundled fixtures (0.24-1.1 s from a constant rate). A loop never spans a
+packet with discontinuity_indicator (PCR, audio or video PID). VBR support would keep each packet's
+source PCR timing, compress only the seam, and pace UDP by the PCR.
+
 Open:
-- **VBR sources** (`constantRate: false`, e.g. football and three of the four bundled fixtures,
-  up to ±1.1 s from a constant rate): still looped at the average rate, which moves packets that
-  far (warned). Fix: keep the source PCR timing per packet (VBR output), compress only the seam;
-  UDP pacing then follows the PCR instead of a constant rate.
 - Choose loop points with matching buffer level (small `stuffingDelta`) to shrink the seam shift.
 - An encoder's first GOP may have no free slots for moved audio (x264/ffmpeg send no audio before
   ~0.1 s); the moved audio then arrives up to ~90 ms later than in the source (still ahead).

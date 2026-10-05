@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Supports H.264/H.265/MPEG-2 video and AAC/MP2/AC-3 audio; passes through and per-wrap timestamp-shifts other PIDs such as SMPTE-2038 ANC data
   - Output to a file (`-o`, bounded by `-m`) or UDP unicast/multicast (`-a`, paced at exactly the PCR rate); `-scan` prints the loop-point analysis as JSON
   - Refuses to loop streams where an audio or video PES lacks a PTS
-  - Keeps every packet's source timing in constant-rate streams; audio multiplexed outside the loop is moved across the loop boundary; warns about variable-rate streams
+  - Keeps every packet's source timing; audio multiplexed outside the loop is moved across the loop boundary
+  - Refuses variable-rate streams, detected from the PCR; a loop never spans a signalled discontinuity
   - Keeps SCTE-35 cues whose whole break is inside the loop, re-sent each wrap with shifted time and new event IDs; others are dropped
 - mp2ts-info now lists MPEG-2 video PIDs
 - mp2ts-nallister now prints per-picture POC (`pic_order_cnt_lsb`) and slice QP (initial SliceQPY) for AVC and HEVC, parsed from the first slice (segment) of each picture
