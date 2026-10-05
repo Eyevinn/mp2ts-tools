@@ -111,7 +111,8 @@ MPEG-2 streams the loop-point GOP is marked `broken_link`; the B-pictures leadin
 each seam still predict from the previous wrap's tail, so closed GOPs are needed
 for a pixel-perfect seam. Non-audio/video PIDs such as SMPTE-2038 ANC data are passed
 through and timestamp-shifted per wrap. The output can be written to a file or
-sent over UDP (unicast or multicast).
+sent over UDP (unicast or multicast); UDP output is paced at exactly the rate
+the PCR describes, on the monotonic clock.
 
 The input must be a seekable file (stdin is not supported, since it is read more
 than once), and every audio and video PES must carry a PTS. Supported video is H.264, H.265, and MPEG-2; supported audio is AAC,
