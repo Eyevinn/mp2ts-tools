@@ -25,7 +25,7 @@ golangci-lint run
 go mod tidy
 ```
 
-Build injects version info via `-ldflags -X` — the Makefile sets `internal.commitVersion` and `internal.commitDate` at link time from git tags/timestamps.
+`-version` reports what Go (1.24+) embeds when building a package in a git checkout: the tag or a pseudo-version (with `+dirty` for local changes) and the commit date, read by `internal.Version()` (`buildinfo.go`). Build `./cmd/<tool>` as a package (as the Makefile does), not `main.go` as a file, which gives `(devel)`.
 
 ## Architecture
 

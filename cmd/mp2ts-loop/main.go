@@ -263,7 +263,7 @@ func main() {
 		os.Exit(2)
 	}
 	if opts.Version {
-		fmt.Printf("mp2ts-loop version %s\n", internal.GetVersion())
+		fmt.Printf("mp2ts-loop version %s\n", internal.Version())
 		os.Exit(0)
 	}
 
