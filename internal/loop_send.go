@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/bits"
 	"net"
 	"time"
 
@@ -124,15 +125,18 @@ func (m multiSink) Close() error {
 }
 
 // udpSink batches TS packets into 1316-byte datagrams and paces them at the
-// stream's constant rate. Send times are absolute (start + idx*step), so jitter
-// never accumulates into drift.
+// stream's constant rate: loopDurTicks per numPackets, the same rate the PCR is
+// stamped with. Each send time is computed exactly from the packet index (no
+// rounded per-packet step), and measured on the monotonic clock, so neither
+// rounding nor sleep jitter accumulates and wall-clock steps have no effect.
 type udpSink struct {
-	conn    net.Conn
-	buf     []byte
-	count   int
-	startNs int64
-	stepNs  int64
-	idx     int64
+	conn         net.Conn
+	buf          []byte
+	count        int
+	start        time.Time // carries a monotonic clock reading
+	loopDurTicks int64
+	numPackets   int64
+	idx          int64
 }
 
 func newUDPSink(addr string, loopDurTicks int64, numPackets int) (*udpSink, error) {
@@ -140,16 +144,27 @@ func newUDPSink(addr string, loopDurTicks int64, numPackets int) (*udpSink, erro
 	if err != nil {
 		return nil, fmt.Errorf("dial udp %s: %w", addr, err)
 	}
-	stepNs := int64(0)
-	if numPackets > 0 {
-		stepNs = int64(float64(loopDurTicks)/90000.0/float64(numPackets)*1e9 + 0.5)
-	}
 	return &udpSink{
-		conn:    conn,
-		buf:     make([]byte, 0, tsPacketsPerDatagram*PacketSize),
-		stepNs:  stepNs,
-		startNs: time.Now().UnixNano(),
+		conn:         conn,
+		buf:          make([]byte, 0, tsPacketsPerDatagram*PacketSize),
+		start:        time.Now(),
+		loopDurTicks: loopDurTicks,
+		numPackets:   int64(numPackets),
 	}, nil
+}
+
+// paceOffsetNs returns when packet idx is due, in ns after the start, at a rate
+// of loopDurTicks (90 kHz) per numPackets packets: idx*loopDurTicks*1e9 /
+// (90000*numPackets), rounded down. The product is formed in 128 bits, so it is
+// exact for any realistic run length. It returns 0 (send at once) if
+// numPackets is not positive.
+func paceOffsetNs(idx, loopDurTicks, numPackets int64) int64 {
+	if numPackets <= 0 || idx <= 0 || loopDurTicks <= 0 {
+		return 0
+	}
+	hi, lo := bits.Mul64(uint64(idx), uint64(loopDurTicks)*100_000) // 1e9/90000 = 100000/9
+	q, _ := bits.Div64(hi, lo, 9*uint64(numPackets))
+	return int64(q)
 }
 
 func (u *udpSink) WritePacket(p []byte) error {
@@ -166,9 +181,9 @@ func (u *udpSink) send() error {
 	if u.count == 0 {
 		return nil
 	}
-	target := u.startNs + u.idx*u.stepNs
-	if d := target - time.Now().UnixNano(); d > 0 {
-		time.Sleep(time.Duration(d))
+	due := time.Duration(paceOffsetNs(u.idx, u.loopDurTicks, u.numPackets))
+	if d := due - time.Since(u.start); d > 0 {
+		time.Sleep(d)
 	}
 	// UDP write errors (e.g. ICMP "connection refused" when no receiver is
 	// listening) must not stop a live stream; log and keep going.

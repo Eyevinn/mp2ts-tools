@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Constant video frame rate and GOP duration, a loop of whole frame periods (even frame count at 59.94 fps), drift-free audio shifted per wrap by less than one audio frame, and a regenerated linear PCR for constant-rate streams
   - Open-GOP loop points are marked at the seam: HEVC CRA becomes BLA so the seam decodes cleanly; MPEG-2 gets `broken_link`
   - Supports H.264/H.265/MPEG-2 video and AAC/MP2/AC-3 audio; passes through and per-wrap timestamp-shifts other PIDs such as SMPTE-2038 ANC data
-  - Output to a file (`-o`, bounded by `-m`) or UDP unicast/multicast (`-a`); `-scan` prints the loop-point analysis as JSON
+  - Output to a file (`-o`, bounded by `-m`) or UDP unicast/multicast (`-a`, paced at exactly the PCR rate); `-scan` prints the loop-point analysis as JSON
   - Refuses to loop streams where an audio or video PES lacks a PTS
 - mp2ts-info now lists MPEG-2 video PIDs
 - mp2ts-nallister now prints per-picture POC (`pic_order_cnt_lsb`) and slice QP (initial SliceQPY) for AVC and HEVC, parsed from the first slice (segment) of each picture
