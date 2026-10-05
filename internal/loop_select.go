@@ -24,6 +24,8 @@ type LoopPCR struct {
 	SegmentPackets int   `json:"segmentPackets"` // TS packets in [startPkt,endPkt)
 	IdealPackets   int64 `json:"idealPackets"`   // packets the loop duration implies at the bitrate
 	StuffingDelta  int64 `json:"stuffingDelta"`  // segment-ideal: null pkts to drop(+)/add(-) at the seam
+	// SourceDeviationMs is how far the source's PCR is from a constant rate.
+	SourceDeviationMs float64 `json:"sourceDeviationMs"`
 }
 
 // LoopPlan is the chosen loop: the video window plus how audio, rate and PCR
@@ -45,17 +47,24 @@ type LoopPlan struct {
 	Warnings      []string    `json:"warnings,omitempty"`
 }
 
-// packetWindow returns the source packets [start, end) the loop segment is cut
-// from: from the loop-point picture (or the first kept audio PES, if earlier) to
-// the end loop-point picture. Audio past the end is collected separately.
+// packetWindow returns the source packets [start, end) the loop segment's
+// non-audio packets are cut from: from the loop-point picture to the end
+// loop-point picture. Audio is selected by PTS instead, and audio multiplexed
+// outside the window is moved across the loop boundary (see BuildLoopSegment).
 func (p *LoopPlan) packetWindow() (start, end int) {
-	start = int(p.StartPktNr)
+	return int(p.StartPktNr), int(p.EndPktNr)
+}
+
+// audioReadStart returns the first source packet to read audio from: the first
+// kept audio PES may be multiplexed before the loop-point picture.
+func (p *LoopPlan) audioReadStart() int {
+	start := int(p.StartPktNr)
 	for _, a := range p.Audio {
 		if a.StartPTS >= 0 && int(a.StartPktNr) < start {
 			start = int(a.StartPktNr)
 		}
 	}
-	return start, int(p.EndPktNr)
+	return start
 }
 
 // Loop-point classes, from cleanest to least clean. MPEG-2 has no IDR or CRA

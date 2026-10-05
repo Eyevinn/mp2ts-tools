@@ -293,7 +293,7 @@ func Scan(ctx context.Context, path string, fpsNum, fpsDen, durCapMS int) (*Scan
 	}
 	bitrate, cbr := loopBitrate(ts)
 	rep.Loop = selectLoop(vid, auds, fpsNum, fpsDen, durCapMS, ts.PCRPid, bitrate, cbr)
-	planLoopSCTE35(ts, rep.Loop)
+	finishPlan(ts, rep.Loop)
 	return rep, nil
 }
 

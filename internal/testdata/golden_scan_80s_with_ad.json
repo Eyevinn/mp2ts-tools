@@ -73,7 +73,8 @@
       "bitrateBps": 242505,
       "segmentPackets": 12738,
       "idealPackets": 12738,
-      "stuffingDelta": 0
+      "stuffingDelta": 0,
+      "sourceDeviationMs": 1028.5
     },
     "scte35": {
       "pid": 1001,
@@ -91,6 +92,9 @@
           "kept": true
         }
       ]
-    }
+    },
+    "warnings": [
+      "not a constant-rate stream (its PCR is up to 1028 ms from a constant rate): the PCR is regenerated at the average rate, which moves packets that far from their source timing"
+    ]
   }
 }

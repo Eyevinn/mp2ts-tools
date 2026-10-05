@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/Comcast/gots/v2"
 	"github.com/Comcast/gots/v2/scte35"
@@ -490,9 +491,27 @@ func (p *scte35Patcher) packets(data []byte, wrap int, loopDur int64) map[int][]
 	return out
 }
 
+// finishPlan adds what the plan needs from the whole stream: how far its PCR is
+// from a constant rate, and which SCTE-35 cues of the chosen loop are kept.
+func finishPlan(ts *TSStream, plan *LoopPlan) {
+	if plan == nil || plan.NumGOPs < 1 {
+		return
+	}
+	if plan.PCR != nil {
+		plan.PCR.SourceDeviationMs = math.Round(ts.PCRDeviationMs()*10) / 10
+		if !plan.PCR.ConstantRate {
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf(
+				"not a constant-rate stream (its PCR is up to %.0f ms from a constant rate): the PCR is "+
+					"regenerated at the average rate, which moves packets that far from their source timing",
+				plan.PCR.SourceDeviationMs))
+		}
+	}
+	planLoopSCTE35(ts, plan)
+}
+
 // planLoopSCTE35 adds to the plan which SCTE-35 cues of the chosen loop are kept.
 func planLoopSCTE35(ts *TSStream, plan *LoopPlan) {
-	if ts.SCTE35Pid < 0 || plan == nil || plan.NumGOPs < 1 {
+	if ts.SCTE35Pid < 0 {
 		return
 	}
 	start, end := plan.packetWindow()

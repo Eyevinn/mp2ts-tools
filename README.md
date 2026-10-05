@@ -114,7 +114,16 @@ through and timestamp-shifted per wrap. SCTE-35 cues are kept only when the whol
 break, from CUE-OUT to CUE-IN (or CUE-OUT plus its duration), lies inside the
 loop; a cue sent ahead of the loop start for such a break is moved to the start.
 Every wrap re-sends the kept cues with `pts_adjustment` advanced by the loop
-duration and new event IDs. The output can be written to a file or
+duration and new event IDs.
+
+In a constant-rate stream every packet keeps its source timing: video and other
+packets stay in their source position, and audio that is multiplexed outside the
+loop's packets (audio usually lags the video it plays with) is moved across the
+loop boundary, to the same place relative to the video. Only just before the
+seam are packets moved, by the difference in decoder buffer level between the
+two loop points. A stream that is not constant-rate is looped at its average
+rate, which moves packets away from their source timing; the scan reports how far
+(`loop.pcr.sourceDeviationMs`) with a warning. The output can be written to a file or
 sent over UDP (unicast or multicast); UDP output is paced at exactly the rate
 the PCR describes, on the monotonic clock.
 

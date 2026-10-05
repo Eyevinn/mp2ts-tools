@@ -209,9 +209,19 @@ func (u *udpSink) Close() error {
 // forever (until ctx is cancelled).
 func LoopToSink(ctx context.Context, seg *LoopSegment, sink packetSink, maxWraps int) error {
 	cc := make(ccGen)
+	audioPTS := make(map[int][]int64) // PTS of each audio PES in the segment
+	var p packet.Packet
+	for i := 0; i < seg.NumPackets; i++ {
+		copy(p[:], seg.Data[i*PacketSize:(i+1)*PacketSize])
+		if _, ok := seg.AudioStartPTS[packet.Pid(&p)]; ok && p.PayloadUnitStartIndicator() {
+			if pts := GetPTS(&p); pts >= 0 {
+				audioPTS[packet.Pid(&p)] = append(audioPTS[packet.Pid(&p)], pts)
+			}
+		}
+	}
 	audio := make(map[int]*audioWrapState, len(seg.AudioStartPTS))
 	for pid, start := range seg.AudioStartPTS {
-		audio[pid] = newAudioWrapState(start, seg.LoopDurTicks)
+		audio[pid] = newAudioWrapState(start, seg.LoopDurTicks, audioPTS[pid])
 	}
 	keepPES := make(map[int]bool)   // current audio PES kept this wrap?
 	audioOff := make(map[int]int64) // current audio PES output offset
@@ -220,9 +230,6 @@ func LoopToSink(ctx context.Context, seg *LoopSegment, sink packetSink, maxWraps
 	var pkt packet.Packet
 	for wrap := 0; maxWraps <= 0 || wrap < maxWraps; wrap++ {
 		offset := int64(wrap) * seg.LoopDurTicks
-		for _, a := range audio {
-			a.onWrap()
-		}
 		var scte map[int][]byte // this wrap's SCTE-35 packets; wrap 0 is the segment as is
 		if seg.scte35 != nil && wrap > 0 {
 			scte = seg.scte35.packets(seg.Data, wrap, seg.LoopDurTicks)
@@ -245,9 +252,17 @@ func LoopToSink(ctx context.Context, seg *LoopSegment, sink packetSink, maxWraps
 			if st, isAudio := audio[pid]; isAudio {
 				if pkt.PayloadUnitStartIndicator() {
 					if p := GetPTS(&pkt); p >= 0 {
-						d, keep := st.frame(p)
+						// Audio moved across the loop boundary belongs to the
+						// previous or next wrap; there is none before the first
+						// wrap or after the last.
+						L := wrap + int(seg.audioRot[i])
+						keep := false
+						var d int64
+						if L >= 0 && (maxWraps <= 0 || L < maxWraps) {
+							d, keep = st.frame(L, p)
+						}
 						keepPES[pid] = keep
-						audioOff[pid] = offset + d
+						audioOff[pid] = int64(L)*seg.LoopDurTicks + d
 					}
 				}
 				if !keepPES[pid] {
