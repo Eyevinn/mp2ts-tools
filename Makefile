@@ -1,15 +1,26 @@
 .PHONY: all
 all: test check coverage build
 
+CMDS = mp2ts-info mp2ts-nallister mp2ts-pslister mp2ts-extract mp2ts-timeshift mp2ts-pidfilter mp2ts-loop
+BINARIES = $(addprefix out/,$(CMDS))
+
 .PHONY: build
-build: mp2ts-info mp2ts-nallister mp2ts-pslister mp2ts-extract mp2ts-timeshift mp2ts-loop
+build: $(BINARIES)
 
 .PHONY: prepare
 prepare:
 	go mod tidy
 
-mp2ts-info mp2ts-nallister mp2ts-pslister mp2ts-extract mp2ts-timeshift mp2ts-loop:
-	go build -ldflags "-X github.com/Eyevinn/mp2ts-tools/internal.commitVersion=$$(git describe --tags HEAD) -X github.com/Eyevinn/mp2ts-tools/internal.commitDate=$$(git log -1 --format=%ct)" -o out/$@ ./cmd/$@/main.go
+# Binaries are built as packages, not as main.go files, so that they carry the
+# version Go embeds from the git tag and commit (see internal/buildinfo.go).
+# They are .PHONY because that version is not a file prerequisite: a binary
+# built before a commit or a tag would be kept, still naming the old one. The
+# build cache makes the rebuild cheap. `make <tool>` still works as a shorthand.
+.PHONY: $(BINARIES) $(CMDS)
+$(BINARIES): out/%:
+	go build -o $@ ./cmd/$*
+
+$(CMDS): %: out/%
 
 .PHONY: test
 test: prepare
@@ -34,6 +45,6 @@ update:
 clean:
 	rm -f out/*
 
-install: all
-	cp out/* $(GOPATH)/bin/
+install:
+	go install $(addprefix ./cmd/,$(CMDS))
 

@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -268,7 +269,7 @@ func ParsePidsFromString(input string) []int {
 func ParseParams(function OptionParseFunc) (o Options, inFile string) {
 	o = function()
 	if o.Version {
-		fmt.Printf("ts-info version %s\n", GetVersion())
+		fmt.Printf("%s version %s\n", filepath.Base(os.Args[0]), Version())
 		os.Exit(0)
 	}
 	if len(flag.Args()) < 1 {

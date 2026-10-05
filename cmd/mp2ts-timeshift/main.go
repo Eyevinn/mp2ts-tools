@@ -171,7 +171,7 @@ func main() {
 	opts := parseOptions()
 
 	if opts.Version {
-		fmt.Printf("mp2ts-timeshift version %s\n", internal.GetVersion())
+		fmt.Printf("mp2ts-timeshift version %s\n", internal.Version())
 		os.Exit(0)
 	}
 
