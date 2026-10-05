@@ -291,8 +291,12 @@ func Scan(ctx context.Context, path string, fpsNum, fpsDen, durCapMS int) (*Scan
 		rep.Note = "cannot loop: " + err.Error()
 		return rep, nil
 	}
+	if err := ts.requireConstantRate(); err != nil {
+		rep.Note = "cannot loop: " + err.Error()
+		return rep, nil
+	}
 	bitrate, cbr := loopBitrate(ts)
-	rep.Loop = selectLoop(vid, auds, fpsNum, fpsDen, durCapMS, ts.PCRPid, bitrate, cbr)
+	rep.Loop = selectLoop(vid, auds, fpsNum, fpsDen, durCapMS, ts.PCRPid, bitrate, cbr, ts.discontinuities)
 	finishPlan(ts, rep.Loop)
 	return rep, nil
 }

@@ -164,8 +164,11 @@ func PrepareLoop(ctx context.Context, path string, fpsNum, fpsDen, durCapMS int)
 	if err := requirePTS(vid, auds); err != nil {
 		return nil, nil, err
 	}
+	if err := ts.requireConstantRate(); err != nil {
+		return nil, nil, err
+	}
 	bitrate, cbr := loopBitrate(ts)
-	plan := selectLoop(vid, auds, fpsNum, fpsDen, durCapMS, ts.PCRPid, bitrate, cbr)
+	plan := selectLoop(vid, auds, fpsNum, fpsDen, durCapMS, ts.PCRPid, bitrate, cbr, ts.discontinuities)
 	finishPlan(ts, plan)
 	if plan == nil || plan.LoopPointType == "none" || plan.NumGOPs < 1 {
 		return nil, plan, fmt.Errorf("no loopable interval found (need at least two %s loop points)", plan.LoopPointType)

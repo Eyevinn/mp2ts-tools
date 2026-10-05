@@ -46,55 +46,5 @@
       "durationTicks": 7125120
     }
   ],
-  "loop": {
-    "loopPointType": "IDR",
-    "numGops": 79,
-    "frames": 2370,
-    "startPktNr": 4,
-    "endPktNr": 12742,
-    "startPTS": 132000,
-    "endPTS": 7242000,
-    "loopDurTicks": 7110000,
-    "loopDurMs": 79000,
-    "psAtStart": true,
-    "audio": [
-      {
-        "pid": 257,
-        "startPTS": 158640,
-        "startPktNr": 144,
-        "frameDurTicks": 1920,
-        "wholeFrames": 3703,
-        "residualTicks": 240
-      }
-    ],
-    "pcr": {
-      "pid": 256,
-      "constantRate": false,
-      "bitrateBps": 242505,
-      "segmentPackets": 12738,
-      "idealPackets": 12738,
-      "stuffingDelta": 0,
-      "sourceDeviationMs": 1028.5
-    },
-    "scte35": {
-      "pid": 1001,
-      "sections": 0,
-      "moved": 1,
-      "kept": 1,
-      "eventIdStep": 1,
-      "events": [
-        {
-          "kind": "splice_insert",
-          "eventId": 255,
-          "startPTS": 1032000,
-          "endPTS": 2832000,
-          "messages": 1,
-          "kept": true
-        }
-      ]
-    },
-    "warnings": [
-      "not a constant-rate stream (its PCR is up to 1028 ms from a constant rate): the PCR is regenerated at the average rate, which moves packets that far from their source timing"
-    ]
-  }
+  "note": "cannot loop: not a constant-rate stream: its PCR is up to 1029 ms from a constant rate (variable-rate streams are not supported)"
 }

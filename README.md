@@ -121,14 +121,14 @@ packets stay in their source position, and audio that is multiplexed outside the
 loop's packets (audio usually lags the video it plays with) is moved across the
 loop boundary, to the same place relative to the video. Only just before the
 seam are packets moved, by the difference in decoder buffer level between the
-two loop points. A stream that is not constant-rate is looped at its average
-rate, which moves packets away from their source timing; the scan reports how far
-(`loop.pcr.sourceDeviationMs`) with a warning. The output can be written to a file or
+two loop points. Variable-rate streams, detected from the PCR (signalled
+discontinuities aside), are refused, and a loop never spans a discontinuity. The
+output can be written to a file or
 sent over UDP (unicast or multicast); UDP output is paced at exactly the rate
 the PCR describes, on the monotonic clock.
 
-The input must be a seekable file (stdin is not supported, since it is read more
-than once), and every audio and video PES must carry a PTS. Supported video is H.264, H.265, and MPEG-2; supported audio is AAC,
+The input must be a seekable constant-rate file (stdin is not supported, since
+it is read more than once), and every audio and video PES must carry a PTS. Supported video is H.264, H.265, and MPEG-2; supported audio is AAC,
 MP2, and AC-3. Ultra-low-latency / gradual-decoder-refresh streams (no IDR/CRA) cannot be
 looped and are reported as such.
 

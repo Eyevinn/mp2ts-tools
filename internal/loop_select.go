@@ -125,7 +125,10 @@ func loopPointClass(codec Codec, pics []PicRecord) (string, func(PicRecord) bool
 // 23.976 (3753.75 ticks) the count must be a multiple of four. Any other loop is
 // up to half a tick off the nominal rate, and the source's 1501/1502 timestamp
 // dither breaks at every seam. Such loops are used only if no exact one exists.
-func selectLoop(vid *scanTrack, audios []*scanTrack, fpsNum, fpsDen, durCapMS, pcrPid int, bitrate int64, cbr bool) *LoopPlan {
+//
+// A loop never spans a signalled discontinuity (breaks: sorted packet numbers
+// with discontinuity_indicator), since PCR and timestamps jump there.
+func selectLoop(vid *scanTrack, audios []*scanTrack, fpsNum, fpsDen, durCapMS, pcrPid int, bitrate int64, cbr bool, breaks []int) *LoopPlan {
 	if vid == nil || len(vid.pics) == 0 {
 		return nil
 	}
@@ -176,10 +179,15 @@ func selectLoop(vid *scanTrack, audios []*scanTrack, fpsNum, fpsDen, durCapMS, p
 	// the earliest start.
 	capTicks := int64(durCapMS) * 90
 	si, ei, bestExact := -1, -1, false
+	// spans reports whether a discontinuity lies inside the packets (start, end).
+	spans := func(start, end uint32) bool {
+		k := sort.SearchInts(breaks, int(start)+1)
+		return k < len(breaks) && breaks[k] < int(end)
+	}
 	for i := 0; i < len(elig); i++ {
 		for j := i + 1; j < len(elig); j++ {
 			dur := elig[j].pts - elig[i].pts
-			if durCapMS > 0 && dur > capTicks {
+			if (durCapMS > 0 && dur > capTicks) || spans(elig[i].pkt, elig[j].pkt) {
 				break
 			}
 			ex := offNominal(dur, elig[j].idx-elig[i].idx) == 0
@@ -189,6 +197,11 @@ func selectLoop(vid *scanTrack, audios []*scanTrack, fpsNum, fpsDen, durCapMS, p
 		}
 	}
 	if si < 0 {
+		if spans(elig[0].pkt, elig[1].pkt) {
+			plan.LoopPointType = loopPointNone
+			plan.Warnings = append(plan.Warnings, "a discontinuity lies between every two loop points; cannot loop")
+			return plan
+		}
 		plan.Warnings = append(plan.Warnings, "duration cap is shorter than one GOP; using one GOP")
 		si, ei = 0, 1
 		bestExact = offNominal(elig[1].pts-elig[0].pts, elig[1].idx-elig[0].idx) == 0

@@ -25,7 +25,7 @@ func buildAudioPES(streamID byte, pts int64, frame []byte) []byte {
 	pes[3] = streamID
 	pes[4] = byte(pesPacketLength >> 8)
 	pes[5] = byte(pesPacketLength)
-	pes[6] = 0x80 // '10' marker, no scrambling/priority
+	pes[6] = 0x84 // '10' marker, no scrambling/priority, data_alignment_indicator: starts with a frame
 	pes[7] = 0x80 // PTS present, no DTS
 	pes[8] = 0x05 // PES_header_data_length
 	putPTS(pes[9:14], pts)

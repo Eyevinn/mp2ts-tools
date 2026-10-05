@@ -127,7 +127,7 @@ func TestSelectLoop(t *testing.T) {
 	}
 
 	// Longest loop.
-	p := selectLoop(vid, []*scanTrack{aud}, 0, 0, 0, 256, 15_000_000, true)
+	p := selectLoop(vid, []*scanTrack{aud}, 0, 0, 0, 256, 15_000_000, true, nil)
 	if p == nil || p.NumGOPs != 3 || p.LoopDurTicks != 270000 || p.StartPTS != 0 || p.EndPTS != 270000 {
 		t.Fatalf("longest loop: %+v", p)
 	}
@@ -142,7 +142,7 @@ func TestSelectLoop(t *testing.T) {
 	}
 
 	// Duration cap to two GOPs.
-	p2 := selectLoop(vid, []*scanTrack{aud}, 0, 0, 2000, 256, 15_000_000, true)
+	p2 := selectLoop(vid, []*scanTrack{aud}, 0, 0, 2000, 256, 15_000_000, true, nil)
 	if p2.NumGOPs != 2 || p2.LoopDurTicks != 180000 {
 		t.Errorf("capped loop: numGops=%d dur=%d", p2.NumGOPs, p2.LoopDurTicks)
 	}
@@ -165,17 +165,17 @@ func TestSelectLoopWholeFrames(t *testing.T) {
 		return vid
 	}
 
-	p := selectLoop(mkVideo(15, 7), nil, 0, 0, 0, 256, 0, false)
+	p := selectLoop(mkVideo(15, 7), nil, 0, 0, 0, 256, 0, false, nil)
 	if p.NumGOPs != 6 || p.Frames != 90 || p.LoopDurTicks != 90*3003/2 || len(p.Warnings) != 0 {
 		t.Errorf("odd GOP: got %d GOPs, %d frames, %d ticks, warnings %v; want 6 GOPs, 90 frames, %d ticks",
 			p.NumGOPs, p.Frames, p.LoopDurTicks, p.Warnings, 90*3003/2)
 	}
 	// The same with the frame-rate hint.
-	if p := selectLoop(mkVideo(15, 7), nil, 60000, 1001, 0, 256, 0, false); p.NumGOPs != 6 {
+	if p := selectLoop(mkVideo(15, 7), nil, 60000, 1001, 0, 256, 0, false, nil); p.NumGOPs != 6 {
 		t.Errorf("odd GOP with -fps hint: got %d GOPs, want 6", p.NumGOPs)
 	}
 	// One GOP of 15 frames is the only loop: inexact, kept with a warning.
-	p = selectLoop(mkVideo(15, 1), nil, 0, 0, 0, 256, 0, false)
+	p = selectLoop(mkVideo(15, 1), nil, 0, 0, 0, 256, 0, false, nil)
 	if p.NumGOPs != 1 || p.Frames != 15 || len(p.Warnings) != 1 {
 		t.Errorf("single odd GOP: got %d GOPs, %d frames, warnings %v", p.NumGOPs, p.Frames, p.Warnings)
 	}
@@ -235,5 +235,56 @@ func TestPlaceAudio(t *testing.T) {
 		if used[s] {
 			t.Errorf("slot %d should still be free", s)
 		}
+	}
+}
+
+// TestPCRDiscontinuity checks that a signalled time-base discontinuity does not
+// make a constant-rate stream look variable-rate, while an unsignalled jump does.
+func TestPCRDiscontinuity(t *testing.T) {
+	const pktTicks = 300 * 30 // 27 MHz ticks per packet
+	mk := func(signalled bool) *TSStream {
+		ts := &TSStream{}
+		for k := 0; k < 100; k++ {
+			pkt := k * 100
+			pcr := int64(pkt) * pktTicks
+			if k >= 50 {
+				pcr += 270_000_000 // a 10 s jump in the time base
+			}
+			ts.pcrSamples = append(ts.pcrSamples, PCRSample{PktNr: pkt, PCR: pcr, Discontinuity: signalled && k == 50})
+		}
+		return ts
+	}
+	if _, _, _, constant, ok := mk(true).PCRBitrate(); !ok || !constant {
+		t.Errorf("signalled discontinuity: constant=%v ok=%v, want constant", constant, ok)
+	}
+	if d := mk(true).PCRDeviationMs(); d > 0.001 {
+		t.Errorf("signalled discontinuity: deviation %.3f ms, want 0", d)
+	}
+	if err := mk(true).requireConstantRate(); err != nil {
+		t.Errorf("signalled discontinuity refused: %v", err)
+	}
+	if _, _, _, constant, _ := mk(false).PCRBitrate(); constant {
+		t.Error("unsignalled PCR jump should not count as constant-rate")
+	}
+	if err := mk(false).requireConstantRate(); err == nil {
+		t.Error("unsignalled PCR jump should be refused")
+	}
+}
+
+// TestSelectLoopDiscontinuity checks that the loop never spans a discontinuity.
+func TestSelectLoopDiscontinuity(t *testing.T) {
+	vid := &scanTrack{pid: 256, codec: CODEC_AVC, mediaType: "video"}
+	for i := 0; i < 6; i++ { // IDRs 1 s apart, at packets 0, 100, ..., 500
+		vid.pics = append(vid.pics, PicRecord{PTS: int64(i) * 90000, DTS: int64(i) * 90000,
+			StartPktNr: uint32(i) * 100, IsIDR: true, IsRAP: true, PSPresent: true, Field: FieldFrame})
+	}
+	p := selectLoop(vid, nil, 0, 0, 0, 256, 0, false, []int{150})
+	if p.NumGOPs != 3 || p.StartPktNr != 200 || p.EndPktNr != 500 {
+		t.Errorf("loop after the discontinuity: %d GOPs, packets %d..%d; want 3 GOPs, 200..500",
+			p.NumGOPs, p.StartPktNr, p.EndPktNr)
+	}
+	p = selectLoop(vid, nil, 0, 0, 0, 256, 0, false, []int{50, 150, 250, 350, 450})
+	if p.LoopPointType != loopPointNone {
+		t.Errorf("a discontinuity in every GOP: got a %s loop of %d GOPs, want none", p.LoopPointType, p.NumGOPs)
 	}
 }

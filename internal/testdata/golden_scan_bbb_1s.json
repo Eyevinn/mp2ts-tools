@@ -46,38 +46,5 @@
       "durationTicks": 52245
     }
   ],
-  "loop": {
-    "loopPointType": "IDR",
-    "numGops": 1,
-    "frames": 24,
-    "startPktNr": 3,
-    "endPktNr": 440,
-    "startPTS": 133500,
-    "endPTS": 223500,
-    "loopDurTicks": 90000,
-    "loopDurMs": 1000,
-    "psAtStart": true,
-    "audio": [
-      {
-        "pid": 257,
-        "startPTS": 146039,
-        "startPktNr": 42,
-        "frameDurTicks": 2089,
-        "wholeFrames": 43,
-        "residualTicks": 173
-      }
-    ],
-    "pcr": {
-      "pid": 256,
-      "constantRate": false,
-      "bitrateBps": 657248,
-      "segmentPackets": 437,
-      "idealPackets": 437,
-      "stuffingDelta": 0,
-      "sourceDeviationMs": 253.3
-    },
-    "warnings": [
-      "not a constant-rate stream (its PCR is up to 253 ms from a constant rate): the PCR is regenerated at the average rate, which moves packets that far from their source timing"
-    ]
-  }
+  "note": "cannot loop: not a constant-rate stream: its PCR is up to 253 ms from a constant rate (variable-rate streams are not supported)"
 }

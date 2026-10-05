@@ -492,19 +492,14 @@ func (p *scte35Patcher) packets(data []byte, wrap int, loopDur int64) map[int][]
 }
 
 // finishPlan adds what the plan needs from the whole stream: how far its PCR is
-// from a constant rate, and which SCTE-35 cues of the chosen loop are kept.
+// from a constant rate (near 0, since variable-rate streams are refused), and
+// which SCTE-35 cues of the chosen loop are kept.
 func finishPlan(ts *TSStream, plan *LoopPlan) {
 	if plan == nil || plan.NumGOPs < 1 {
 		return
 	}
 	if plan.PCR != nil {
 		plan.PCR.SourceDeviationMs = math.Round(ts.PCRDeviationMs()*10) / 10
-		if !plan.PCR.ConstantRate {
-			plan.Warnings = append(plan.Warnings, fmt.Sprintf(
-				"not a constant-rate stream (its PCR is up to %.0f ms from a constant rate): the PCR is "+
-					"regenerated at the average rate, which moves packets that far from their source timing",
-				plan.PCR.SourceDeviationMs))
-		}
 	}
 	planLoopSCTE35(ts, plan)
 }

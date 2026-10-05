@@ -30,7 +30,8 @@ drift, shifted per wrap by less than one audio frame, and PCR is kept perfect
 for a constant-rate TS. The output can be written to a file or sent over UDP.
 
 The input must be a seekable file (stdin is not supported, since the tool reads
-it more than once), and every audio and video PES must carry a PTS. The supported codecs are H.264, H.265, and MPEG-2 video and
+it more than once), it must be constant-rate, and every audio and video PES must
+carry a PTS. The supported codecs are H.264, H.265, and MPEG-2 video and
 AAC, MP2, and AC-3 audio.
 `
 

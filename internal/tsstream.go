@@ -8,6 +8,7 @@ import (
 	"math"
 
 	"github.com/Comcast/gots/v2/packet"
+	"github.com/Comcast/gots/v2/packet/adaptationfield"
 	"github.com/Comcast/gots/v2/psi"
 )
 
@@ -22,11 +23,13 @@ const (
 	descTagANC               = 0xc4 // SMPTE-2038 ancillary data descriptor
 )
 
-// PCRSample is a single PCR observation: the output packet index and the PCR
-// value (27 MHz).
+// PCRSample is a single PCR observation: the packet index and the PCR value
+// (27 MHz). Discontinuity marks a signalled time-base discontinuity
+// (discontinuity_indicator): this PCR starts a new time base.
 type PCRSample struct {
-	PktNr int
-	PCR   int64
+	PktNr         int
+	PCR           int64
+	Discontinuity bool
 }
 
 // PassThroughStream is a non-audio, non-video elementary stream (e.g. SMPTE-2038
@@ -49,6 +52,7 @@ type TSStream struct {
 	PassThrough        []PassThroughStream
 	totNrPkts          int
 	pcrSamples         []PCRSample
+	discontinuities    []int            // packets with discontinuity_indicator on the PCR, audio, or video PID
 	scte35             sectionAssembler // SCTE-35 sections seen by ProcessTSFile
 	ContinuityCounters *ContinuityCounters
 }
@@ -154,6 +158,7 @@ func (t *TSStream) ProcessTSFile(ctx context.Context, ifh io.ReadSeeker) error {
 	}
 	t.totNrPkts = 0
 	t.scte35 = sectionAssembler{}
+	t.pcrSamples, t.discontinuities = nil, nil
 	var pkt packet.Packet
 	pktNr := -1
 Loop:
@@ -179,13 +184,18 @@ Loop:
 		if step > 1 {
 			slog.Warn("packet loss", "pkt", pktNr, "pid", pid, "step", step)
 		}
+		disc := packet.ContainsAdaptationField(&pkt) && adaptationfield.Length(&pkt) > 0 &&
+			adaptationfield.IsDiscontinuous(&pkt)
 		if pcr, ok := packetPCR(&pkt); ok {
 			if t.PCRPid == -1 {
 				t.PCRPid = pid
 			}
 			if pid == t.PCRPid {
-				t.pcrSamples = append(t.pcrSamples, PCRSample{PktNr: pktNr, PCR: pcr})
+				t.pcrSamples = append(t.pcrSamples, PCRSample{PktNr: pktNr, PCR: pcr, Discontinuity: disc})
 			}
+		}
+		if es, ok := t.ElStreams[pid]; disc && (pid == t.PCRPid || ok && es.MediaType != "text") {
+			t.discontinuities = append(t.discontinuities, pktNr)
 		}
 		if pid == t.SCTE35Pid {
 			t.scte35.add(pkt[:], pktNr*PacketSize)
@@ -220,15 +230,17 @@ func (t *TSStream) PCRSamples() []PCRSample {
 
 // PCRBitrate computes the TS bitrate (bits/s) from PCR samples: the overall
 // average plus the per-interval min/max, and whether the rate is constant (CBR,
-// here within 0.5%). ok is false if there are too few samples.
+// here within 0.5%). Intervals across a signalled discontinuity (a new time
+// base) are skipped. ok is false if there are too few samples.
 func (t *TSStream) PCRBitrate() (avg, min, max int64, constant, ok bool) {
 	s := t.pcrSamples
-	if len(s) < 2 {
-		return 0, 0, 0, false, false
-	}
 	const pcrFull = int64(1) << 33 * 300
 	minF, maxF := 1e30, 0.0
+	var totPk, totPCR int64
 	for k := 1; k < len(s); k++ {
+		if s[k].Discontinuity {
+			continue
+		}
 		dpk := int64(s[k].PktNr - s[k-1].PktNr)
 		dpcr := s[k].PCR - s[k-1].PCR
 		if dpcr < 0 {
@@ -237,6 +249,8 @@ func (t *TSStream) PCRBitrate() (avg, min, max int64, constant, ok bool) {
 		if dpcr <= 0 {
 			continue
 		}
+		totPk += dpk
+		totPCR += dpcr
 		br := float64(dpk*PacketSize*8) * 27_000_000.0 / float64(dpcr)
 		if br < minF {
 			minF = br
@@ -245,24 +259,35 @@ func (t *TSStream) PCRBitrate() (avg, min, max int64, constant, ok bool) {
 			maxF = br
 		}
 	}
-	dpk := int64(s[len(s)-1].PktNr - s[0].PktNr)
-	dpcr := s[len(s)-1].PCR - s[0].PCR
-	if dpcr < 0 {
-		dpcr += pcrFull
-	}
-	if dpcr <= 0 {
+	if totPCR <= 0 {
 		return 0, 0, 0, false, false
 	}
-	avgF := float64(dpk*PacketSize*8) * 27_000_000.0 / float64(dpcr)
+	avgF := float64(totPk*PacketSize*8) * 27_000_000.0 / float64(totPCR)
 	constant = (maxF - minF) <= avgF*0.005
 	return int64(avgF), int64(minF), int64(maxF), constant, true
 }
 
 // PCRDeviationMs returns how far, at most, the PCR samples are from the straight
 // line a constant-rate stream would follow (least squares over packet index), in
-// milliseconds. It is near 0 for a constant-rate stream.
+// milliseconds. Each stretch between signalled discontinuities is fitted on its
+// own. It is near 0 for a constant-rate stream.
 func (t *TSStream) PCRDeviationMs() float64 {
+	dev := 0.0
 	s := t.pcrSamples
+	for a := 0; a < len(s); {
+		b := a + 1
+		for b < len(s) && !s[b].Discontinuity {
+			b++
+		}
+		dev = math.Max(dev, pcrLineDeviation(s[a:b]))
+		a = b
+	}
+	return dev / 27_000
+}
+
+// pcrLineDeviation returns the largest distance (27 MHz ticks) of PCR samples of
+// one time base from their least-squares line over packet index.
+func pcrLineDeviation(s []PCRSample) float64 {
 	if len(s) < 3 {
 		return 0
 	}
@@ -294,11 +319,25 @@ func (t *TSStream) PCRDeviationMs() float64 {
 	slope := sxy / sxx
 	dev := 0.0
 	for k := range xs {
-		if d := math.Abs(ys[k] - (my + slope*(xs[k]-mx))); d > dev {
-			dev = d
-		}
+		dev = math.Max(dev, math.Abs(ys[k]-(my+slope*(xs[k]-mx))))
 	}
-	return dev / 27_000
+	return dev
+}
+
+// requireConstantRate returns an error unless the stream has a usable PCR and a
+// constant rate. The loop is re-timed with a linear PCR at that rate, which only
+// keeps the source timing of a constant-rate stream; variable-rate streams are
+// not supported.
+func (t *TSStream) requireConstantRate() error {
+	_, _, _, constant, ok := t.PCRBitrate()
+	switch {
+	case !ok:
+		return fmt.Errorf("no usable PCR")
+	case !constant:
+		return fmt.Errorf("not a constant-rate stream: its PCR is up to %.0f ms from a constant rate "+
+			"(variable-rate streams are not supported)", t.PCRDeviationMs())
+	}
+	return nil
 }
 
 // FindFirstPTS returns the first PTS of every audio and video elementary stream.
