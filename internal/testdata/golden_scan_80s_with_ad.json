@@ -74,6 +74,23 @@
       "segmentPackets": 12738,
       "idealPackets": 12738,
       "stuffingDelta": 0
+    },
+    "scte35": {
+      "pid": 1001,
+      "sections": 0,
+      "moved": 1,
+      "kept": 1,
+      "eventIdStep": 1,
+      "events": [
+        {
+          "kind": "splice_insert",
+          "eventId": 255,
+          "startPTS": 1032000,
+          "endPTS": 2832000,
+          "messages": 1,
+          "kept": true
+        }
+      ]
     }
   }
 }

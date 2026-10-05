@@ -232,9 +232,12 @@ type AudioFramer interface {
   PAT/PMT + parameter sets at the seam, jitter snap; audio trim/crop/extend + silence; CC
   regen; handle packets that already carry an adaptation field.
 - **M5 — LOOP / SEND.** Per-wrap PTS/DTS/PCR offset, audio `deltaPTS` carry, seamless CC,
-  SCTE-35 PTS shift; file + UDP (7 TS/datagram, NTP-locked pacing).
+  SCTE-35 PTS shift (done 2026-10-05: `pts_adjustment` + event IDs per wrap, `loop_scte35.go`);
+  file + UDP (7 TS/datagram, NTP-locked pacing).
 - **M6 — Robustness.** CRA open-GOP leading-picture (RASL) handling; multiple-SPS tolerance;
-  A/V start displacement; incomplete SCTE pairs.
+  A/V start displacement; incomplete SCTE pairs (done: a cue is kept only if its whole break,
+  CUE-OUT to CUE-IN or OUT + duration, is inside the loop; pre-loop cues for such breaks move to
+  the loop start).
 - **M7 — Tests & docs.** Golden scan-report tests; functional multi-wrap test on a real long
   capture; README + CHANGELOG + CLAUDE.md.
 

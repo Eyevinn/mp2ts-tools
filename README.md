@@ -110,7 +110,11 @@ the loop-point picture is marked BLA so the seam decodes cleanly. For open-GOP
 MPEG-2 streams the loop-point GOP is marked `broken_link`; the B-pictures leading
 each seam still predict from the previous wrap's tail, so closed GOPs are needed
 for a pixel-perfect seam. Non-audio/video PIDs such as SMPTE-2038 ANC data are passed
-through and timestamp-shifted per wrap. The output can be written to a file or
+through and timestamp-shifted per wrap. SCTE-35 cues are kept only when the whole
+break, from CUE-OUT to CUE-IN (or CUE-OUT plus its duration), lies inside the
+loop; a cue sent ahead of the loop start for such a break is moved to the start.
+Every wrap re-sends the kept cues with `pts_adjustment` advanced by the loop
+duration and new event IDs. The output can be written to a file or
 sent over UDP (unicast or multicast); UDP output is paced at exactly the rate
 the PCR describes, on the monotonic clock.
 

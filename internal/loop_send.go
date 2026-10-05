@@ -223,6 +223,10 @@ func LoopToSink(ctx context.Context, seg *LoopSegment, sink packetSink, maxWraps
 		for _, a := range audio {
 			a.onWrap()
 		}
+		var scte map[int][]byte // this wrap's SCTE-35 packets; wrap 0 is the segment as is
+		if seg.scte35 != nil && wrap > 0 {
+			scte = seg.scte35.packets(seg.Data, wrap, seg.LoopDurTicks)
+		}
 		for i := 0; i < seg.NumPackets; i++ {
 			select {
 			case <-ctx.Done():
@@ -231,7 +235,11 @@ func LoopToSink(ctx context.Context, seg *LoopSegment, sink packetSink, maxWraps
 			default:
 			}
 			base := i * PacketSize
-			copy(pkt[:], seg.Data[base:base+PacketSize])
+			if p, ok := scte[i]; ok {
+				copy(pkt[:], p)
+			} else {
+				copy(pkt[:], seg.Data[base:base+PacketSize])
+			}
 			pid := packet.Pid(&pkt)
 
 			if st, isAudio := audio[pid]; isAudio {
