@@ -191,3 +191,49 @@ func TestStatOf(t *testing.T) {
 		t.Errorf("statOf dither: %+v", s)
 	}
 }
+
+// TestPlaceAudio checks the slot placement of audio PES: moved audio from after
+// the window lands at the same distance into it (rot -1), in-place audio follows
+// it in PID order, audio from before the window goes to the end (rot +1) after
+// its PID's in-place audio, and what does not fit overflows past the window.
+func TestPlaceAudio(t *testing.T) {
+	const start, end = 100, 120
+	used := make([]bool, end-start)
+	for _, s := range []int{0, 1, 2, 3, 4, 6, 10, 11, 12, 13, 14} {
+		used[s] = true // video
+	}
+	pkts := func(tag byte, n int) []byte {
+		b := make([]byte, n*PacketSize)
+		for k := 0; k < n; k++ {
+			b[k*PacketSize+4] = tag
+		}
+		return b
+	}
+	chunks := []audioChunk{
+		{pid: 258, src: 95, data: pkts('D', 1)},  // before the window: +1, after 258's in-place audio
+		{pid: 257, src: 106, data: pkts('B', 1)}, // in place
+		{pid: 258, src: 118, data: pkts('E', 3)}, // in place, overflows
+		{pid: 257, src: 125, data: pkts('A', 1)}, // after the window: -1, at slot 5
+		{pid: 257, src: 130, data: pkts('C', 1)}, // after the window: -1, clamped before B
+	}
+	win := make([]byte, (end-start)*PacketSize)
+	rot, overflow, overflowRot := placeAudio(chunks, win, used, start, end, end-start)
+	want := map[int]struct {
+		tag byte
+		rot int8
+	}{5: {'A', -1}, 7: {'C', -1}, 8: {'B', 0}, 18: {'E', 0}, 19: {'E', 0}}
+	for s, w := range want {
+		if got := win[s*PacketSize+4]; got != w.tag || rot[s] != w.rot {
+			t.Errorf("slot %d: %q rot %d, want %q rot %d", s, got, rot[s], w.tag, w.rot)
+		}
+	}
+	if len(overflow) != 2*PacketSize || overflow[4] != 'E' || overflow[PacketSize+4] != 'D' ||
+		overflowRot[0] != 0 || overflowRot[1] != 1 {
+		t.Errorf("overflow: %d packets, rot %v", len(overflow)/PacketSize, overflowRot)
+	}
+	for _, s := range []int{9, 15, 16, 17} {
+		if used[s] {
+			t.Errorf("slot %d should still be free", s)
+		}
+	}
+}

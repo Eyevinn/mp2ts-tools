@@ -73,7 +73,11 @@
       "bitrateBps": 448905,
       "segmentPackets": 289,
       "idealPackets": 298,
-      "stuffingDelta": -9
-    }
+      "stuffingDelta": -9,
+      "sourceDeviationMs": 235.7
+    },
+    "warnings": [
+      "not a constant-rate stream (its PCR is up to 236 ms from a constant rate): the PCR is regenerated at the average rate, which moves packets that far from their source timing"
+    ]
   }
 }

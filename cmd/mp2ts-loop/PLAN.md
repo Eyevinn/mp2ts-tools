@@ -241,6 +241,31 @@ type AudioFramer interface {
 - **M7 — Tests & docs.** Golden scan-report tests; functional multi-wrap test on a real long
   capture; README + CHANGELOG + CLAUDE.md.
 
+## Transport timing (2026-10-05)
+
+The segment keeps one slot per source packet of the video window, so in a constant-rate stream
+every packet keeps its source arrival time (the regenerated linear PCR equals the source's).
+Stuffing and the window's original audio slots are free; each kept audio PES goes into the first
+free slots at or after its target (`placeAudio`). Audio is selected by PTS but multiplexed with an
+offset to the video (usually lagging, by the difference in buffer delays), so audio from after the
+window moves one loop duration (`idealPackets`) back to the start, and belongs to the previous
+wrap (rot -1); audio from before the window moves to the end and belongs to the next wrap (rot +1).
+The per-wrap audio shift is computed from the segment's frame list (`audioWrapState.delta`), so
+it does not depend on the send order. Wrap 0 sends no rot -1 audio, the last wrap of a bounded run
+no rot +1 audio. The window's transmission time differs from the loop duration by the change in
+decoder buffer delay between the two loop points (`stuffingDelta`); free slots are removed from the
+end of the window, or nulls added before the seam, so packets just before the seam move by that
+much. Measured per PES on captures: 0 ms change for most of the wrap, up to 80-113 ms at the seam.
+
+Open:
+- **VBR sources** (`constantRate: false`, e.g. football and three of the four bundled fixtures,
+  up to ±1.1 s from a constant rate): still looped at the average rate, which moves packets that
+  far (warned). Fix: keep the source PCR timing per packet (VBR output), compress only the seam;
+  UDP pacing then follows the PCR instead of a constant rate.
+- Choose loop points with matching buffer level (small `stuffingDelta`) to shrink the seam shift.
+- An encoder's first GOP may have no free slots for moved audio (x264/ffmpeg send no audio before
+  ~0.1 s); the moved audio then arrives up to ~90 ms later than in the source (still ahead).
+
 ## Known limits / v1 scope
 
 - PCR "perfect" = replay identical prepared segment + constant offset (preserves slope);

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 
 	"github.com/Comcast/gots/v2"
 	"github.com/Comcast/gots/v2/packet"
@@ -28,6 +29,114 @@ type LoopSegment struct {
 	PCRPid        int
 	AudioStartPTS map[int]int64  // audio pid -> first audio frame PTS of the loop
 	scte35        *scte35Patcher // re-stamps the kept SCTE-35 cues per wrap (nil if none)
+
+	// audioRot is, per packet, which wrap an audio packet belongs to relative to
+	// the wrap it is sent in: -1 for audio moved to the start of the segment (the
+	// end of the previous wrap), +1 for audio moved to its end (the start of the
+	// next wrap), else 0.
+	audioRot []int8
+}
+
+// audioChunk is a kept audio PES (one or more TS packets) of the loop segment.
+type audioChunk struct {
+	pid  int
+	src  int    // source packet the PES started in
+	pos  int    // where it goes in the window's source packets, after a move
+	rot  int8   // wrap it belongs to relative to the wrap it is sent in
+	data []byte // its TS packets
+}
+
+// placeAudio places the kept audio PES into the free slots of the window (the
+// source packets [start, end), marked used where a packet stays put) and returns
+// each slot's audio rotation plus, after the window, the audio that did not fit.
+// shift is one loop duration in packets: how far moved audio moves.
+//
+// Audio is selected by PTS, but it is not multiplexed next to the video of the
+// same time: it usually lags, by about the difference in decoder buffer delays,
+// so the audio for the end of the loop sits after the window's last packet.
+// Appending it there would leave the start of every wrap without audio and send
+// a burst before every seam. Instead, audio from after the window is moved to
+// the same distance into the window: at the start of the next wrap, which is
+// where it sits relative to the video in the source, and it is marked as
+// belonging to the previous wrap (rot -1). Audio that leads the video, from
+// before the window, moves to its end and belongs to the next wrap (rot +1).
+// Each PES goes into the first free slots at or after its position, and never
+// before the end of the previous PES of its PID, so in-place audio gets back the
+// slots it came from, PES of a PID never interleave, and each PID's audio stays
+// in PTS order: a moved PES is never placed past its PID's in-place audio.
+func placeAudio(chunks []audioChunk, win []byte, used []bool, start, end, shift int) (rot []int8, overflow []byte, overflowRot []int8) {
+	winLen := end - start
+	first, last := make(map[int]int), make(map[int]int)
+	for i := range chunks {
+		c := &chunks[i]
+		c.pos = c.src
+		switch {
+		case c.src >= end:
+			c.pos, c.rot = c.src-shift, -1
+		case c.src < start:
+			c.pos, c.rot = c.src+shift, 1
+		default:
+			if p, ok := first[c.pid]; !ok || c.pos < p {
+				first[c.pid] = c.pos
+			}
+			if p, ok := last[c.pid]; !ok || c.pos > p {
+				last[c.pid] = c.pos
+			}
+		}
+	}
+	for i := range chunks {
+		c := &chunks[i]
+		if p, ok := first[c.pid]; ok && c.rot < 0 && c.pos > p {
+			c.pos = p
+		}
+		if p, ok := last[c.pid]; ok && c.rot > 0 && c.pos < p {
+			c.pos = p
+		}
+	}
+	sort.SliceStable(chunks, func(i, j int) bool {
+		if chunks[i].pos != chunks[j].pos {
+			return chunks[i].pos < chunks[j].pos
+		}
+		return chunks[i].rot < chunks[j].rot
+	})
+
+	// nextFree[i] leads to the first free slot >= i (winLen if none), with path
+	// halving, so placing all the audio is close to linear.
+	nextFree := make([]int, winLen+1)
+	for i := range nextFree {
+		nextFree[i] = i
+		if i < winLen && used[i] {
+			nextFree[i] = i + 1
+		}
+	}
+	find := func(i int) int {
+		for nextFree[i] != i {
+			nextFree[i] = nextFree[nextFree[i]]
+			i = nextFree[i]
+		}
+		return i
+	}
+	rot = make([]int8, winLen)
+	after := make(map[int]int) // per PID: first slot after its previous PES
+	for _, c := range chunks {
+		p := min(max(c.pos-start, after[c.pid], 0), winLen)
+		for k := 0; k < len(c.data)/PacketSize; k++ {
+			pkt := c.data[k*PacketSize : (k+1)*PacketSize]
+			s := find(p)
+			if s == winLen {
+				overflow = append(overflow, pkt...)
+				overflowRot = append(overflowRot, c.rot)
+				p = winLen
+				continue
+			}
+			copy(win[s*PacketSize:], pkt)
+			used[s], rot[s] = true, c.rot
+			nextFree[s] = s + 1
+			p = s + 1
+		}
+		after[c.pid] = p
+	}
+	return rot, overflow, overflowRot
 }
 
 // nullPacket returns a standard MPEG-TS null/stuffing packet (PID 8191).
@@ -57,7 +166,7 @@ func PrepareLoop(ctx context.Context, path string, fpsNum, fpsDen, durCapMS int)
 	}
 	bitrate, cbr := loopBitrate(ts)
 	plan := selectLoop(vid, auds, fpsNum, fpsDen, durCapMS, ts.PCRPid, bitrate, cbr)
-	planLoopSCTE35(ts, plan)
+	finishPlan(ts, plan)
 	if plan == nil || plan.LoopPointType == "none" || plan.NumGOPs < 1 {
 		return nil, plan, fmt.Errorf("no loopable interval found (need at least two %s loop points)", plan.LoopPointType)
 	}
@@ -89,6 +198,7 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	}
 	Vs := plan.StartPTS
 	startByte, endByte := plan.packetWindow()
+	readStart := plan.audioReadStart()
 
 	fh, err := os.Open(path)
 	if err != nil {
@@ -97,19 +207,21 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	defer func() { _ = fh.Close() }()
 
 	var patPkt, pmtPkt []byte
-	// Non-audio packets in original order, and the re-packetized audio to insert
-	// before a given video-packet index (its original PES start position, so the
-	// audio keeps roughly its original timing — slightly earlier, which is safe).
-	videoOther := make([]byte, 0, (endByte-startByte)*PacketSize)
-	videoCount := 0
-	inserts := make(map[int][]byte)
+	// The window's packets, one slot per source packet so that every packet
+	// keeps its source timing. Video and other non-audio packets stay in their
+	// slots; stuffing, audio, and dropped SCTE-35 slots are free for the audio,
+	// which is collected per PES with the source packet each started in.
+	winLen := endByte - startByte
+	win := make([]byte, winLen*PacketSize)
+	used := make([]bool, winLen)
+	var chunks []audioChunk
 
 	audioFramers := make(map[int]AudioFramer)
 	for pid := range audioPIDs {
 		audioFramers[pid] = newAudioFramer(ts.ElStreams[pid].Codec)
 	}
-	audioBuf := make(map[int][]byte) // raw packets of the current audio PES per PID
-	pesInsertIdx := make(map[int]int)
+	audioBuf := make(map[int][]byte)  // raw packets of the current audio PES per PID
+	pesSrc := make(map[int]int)       // source packet the current audio PES started in
 	audioStart := make(map[int]int64) // first kept audio frame PTS per PID
 	spareFrames := make(map[int]int)  // audio frames kept past the loop end (drift spares)
 	audioPast := make(map[int]bool)
@@ -140,16 +252,15 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 	// finalizeAudio processes one fully-buffered audio PES. A multi-frame PES
 	// whose frames tile the payload is re-packetized into one PES per frame (so
 	// the loop can be cut on a frame boundary); single-frame or non-aligned PES
-	// are copied unchanged. The result is queued to be inserted at the PES's
-	// original start position.
+	// are copied unchanged. The result is placed later, from its source position.
 	finalizeAudio := func(pid int) {
 		raw := audioBuf[pid]
 		audioBuf[pid] = nil
 		if len(raw) == 0 {
 			return
 		}
-		idx := pesInsertIdx[pid]
-		emit := func(b []byte) { inserts[idx] = append(inserts[idx], b...) }
+		src := pesSrc[pid]
+		emit := func(b []byte) { chunks = append(chunks, audioChunk{pid: pid, src: src, data: b}) }
 		pesBytes := extractPESPayload(raw)
 		ph, err := pes.NewPESHeader(pesBytes)
 		if err != nil || !ph.HasPTS() {
@@ -209,7 +320,7 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 		if pid == ts.PMTPid && pmtPkt == nil {
 			pmtPkt = append([]byte{}, pkt[:]...)
 		}
-		if pktNr < startByte {
+		if pktNr < readStart {
 			continue
 		}
 		if pid == stuffingPID {
@@ -224,14 +335,14 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 			// at the next PES start of this PID.
 			if pkt.PayloadUnitStartIndicator() {
 				finalizeAudio(pid)
-				pesInsertIdx[pid] = videoCount
+				pesSrc[pid] = pktNr
 				audioBuf[pid] = append([]byte(nil), pkt[:]...)
 			} else if len(audioBuf[pid]) > 0 {
 				audioBuf[pid] = append(audioBuf[pid], pkt[:]...)
 			}
-		} else if pktNr < endByte {
-			videoOther = append(videoOther, pkt[:]...)
-			videoCount++
+		} else if pktNr >= startByte && pktNr < endByte {
+			copy(win[(pktNr-startByte)*PacketSize:], pkt[:])
+			used[pktNr-startByte] = true
 		}
 
 		if pktNr >= endByte {
@@ -255,46 +366,80 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 		return nil, fmt.Errorf("could not capture PAT/PMT packets")
 	}
 
-	// Assemble: PAT/PMT, then video/other packets with the re-packetized audio
-	// inserted at each PES's original start position.
-	seg := make([]byte, 0, len(videoOther)+2*PacketSize)
-	seg = append(seg, patPkt...)
-	seg = append(seg, pmtPkt...)
+	// Assemble: PAT/PMT (and SCTE-35 cues moved in from before the loop), then
+	// the window's slots with the audio placed into free ones, then audio that
+	// did not fit. rot marks, per packet, the wrap the audio belongs to relative
+	// to the wrap it is sent in.
+	var prefix []byte
+	prefix = append(prefix, patPkt...)
+	prefix = append(prefix, pmtPkt...)
 	if plan.SCTE35 != nil {
 		for _, sec := range plan.SCTE35.inject { // cues sent before the loop, for times inside it
-			seg = append(seg, packetizeSection(ts.SCTE35Pid, sec)...)
+			prefix = append(prefix, packetizeSection(ts.SCTE35Pid, sec)...)
 		}
 	}
-	for i := 0; i < videoCount; i++ {
-		if a := inserts[i]; len(a) > 0 {
-			seg = append(seg, a...)
-		}
-		seg = append(seg, videoOther[i*PacketSize:(i+1)*PacketSize]...)
+	// Audio moves across the boundary by one loop duration. For a constant-rate
+	// stream that is the loop's packet count at the bitrate, which differs from
+	// the window's length by the seam adjustment below.
+	shift := winLen
+	if plan.PCR != nil && plan.PCR.ConstantRate && plan.PCR.IdealPackets > 0 {
+		shift = int(plan.PCR.IdealPackets)
 	}
-	if a := inserts[videoCount]; len(a) > 0 {
-		seg = append(seg, a...)
-	}
-	m := len(seg) / PacketSize
-
-	// Target packet count for the loop duration at the bitrate; re-pad with nulls.
-	n := m
-	if bitrate > 0 {
-		n = int(float64(plan.LoopDurTicks)/90000.0*float64(bitrate)/8.0/float64(PacketSize) + 0.5)
-		if n < m {
-			n = m
-		}
-	}
-	nulls := n - m
+	winRot, overflow, overflowRot := placeAudio(chunks, win, used, startByte, endByte, shift)
 	np := nullPacket()
-	data := make([]byte, 0, n*PacketSize)
-	errAcc := 0
-	for i := 0; i < m; i++ {
-		data = append(data, seg[i*PacketSize:(i+1)*PacketSize]...)
-		errAcc += nulls
-		for errAcc >= m {
-			data = append(data, np...)
-			errAcc -= m
+	nPre := len(prefix) / PacketSize
+	var slots [][]byte // nil for a free slot (null stuffing)
+	removedSlot := []byte{}
+	var rot []int8
+	for i := 0; i < nPre; i++ {
+		slots, rot = append(slots, prefix[i*PacketSize:(i+1)*PacketSize]), append(rot, 0)
+	}
+	for j := 0; j < winLen; j++ {
+		if used[j] {
+			slots = append(slots, win[j*PacketSize:(j+1)*PacketSize])
+		} else {
+			slots = append(slots, nil)
 		}
+		rot = append(rot, winRot[j])
+	}
+	for k := 0; k < len(overflow)/PacketSize; k++ {
+		slots, rot = append(slots, overflow[k*PacketSize:(k+1)*PacketSize]), append(rot, overflowRot[k])
+	}
+
+	// A constant-rate segment must hold exactly the packets its duration takes at
+	// the bitrate. The window's transmission time differs from the loop duration
+	// by the change in decoder buffer delay between the two loop points, so null
+	// slots are added before the seam, or free slots removed from the end of the
+	// window, leaving the timing of the rest of the segment as in the source.
+	n := len(slots)
+	if plan.PCR != nil && plan.PCR.ConstantRate && bitrate > 0 {
+		target := int(float64(plan.LoopDurTicks)/90000.0*float64(bitrate)/8.0/float64(PacketSize) + 0.5)
+		for k := len(slots) - 1; k >= 0 && n > target; k-- {
+			if slots[k] == nil {
+				slots[k] = removedSlot
+				n--
+			}
+		}
+		for ; n < target; n++ {
+			slots, rot = append(slots, nil), append(rot, 0)
+		}
+		if n > target {
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf(
+				"the loop needs %d more packets than the bitrate allows; the output rate is raised to fit", n-target))
+		}
+	}
+	data := make([]byte, 0, n*PacketSize)
+	audioRot := make([]int8, 0, n)
+	for k, sl := range slots {
+		switch {
+		case sl == nil:
+			data = append(data, np...)
+		case len(sl) == 0: // removedSlot
+			continue
+		default:
+			data = append(data, sl...)
+		}
+		audioRot = append(audioRot, rot[k])
 	}
 	n = len(data) / PacketSize
 
@@ -323,6 +468,7 @@ func BuildLoopSegment(ctx context.Context, path string, ts *TSStream, plan *Loop
 		VideoPID:      vpid,
 		PCRPid:        pcrPid,
 		AudioStartPTS: audioStart,
+		audioRot:      audioRot,
 		scte35:        scte,
 	}, nil
 }

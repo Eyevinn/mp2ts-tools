@@ -73,7 +73,8 @@
       "bitrateBps": 500000,
       "segmentPackets": 374,
       "idealPackets": 479,
-      "stuffingDelta": -105
+      "stuffingDelta": -105,
+      "sourceDeviationMs": 0
     },
     "warnings": [
       "open-GOP loop point: the B-pictures leading each seam predict from the previous wrap's tail (marked broken_link); expect a brief visual transient"

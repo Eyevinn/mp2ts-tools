@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 
 	"github.com/Comcast/gots/v2/packet"
 	"github.com/Comcast/gots/v2/psi"
@@ -255,6 +256,49 @@ func (t *TSStream) PCRBitrate() (avg, min, max int64, constant, ok bool) {
 	avgF := float64(dpk*PacketSize*8) * 27_000_000.0 / float64(dpcr)
 	constant = (maxF - minF) <= avgF*0.005
 	return int64(avgF), int64(minF), int64(maxF), constant, true
+}
+
+// PCRDeviationMs returns how far, at most, the PCR samples are from the straight
+// line a constant-rate stream would follow (least squares over packet index), in
+// milliseconds. It is near 0 for a constant-rate stream.
+func (t *TSStream) PCRDeviationMs() float64 {
+	s := t.pcrSamples
+	if len(s) < 3 {
+		return 0
+	}
+	const pcrFull = int64(1) << 33 * 300
+	xs := make([]float64, len(s))
+	ys := make([]float64, len(s))
+	var unwrap int64
+	for k := range s {
+		if k > 0 && s[k].PCR < s[k-1].PCR {
+			unwrap += pcrFull
+		}
+		xs[k], ys[k] = float64(s[k].PktNr), float64(s[k].PCR+unwrap)
+	}
+	var mx, my float64
+	for k := range xs {
+		mx += xs[k]
+		my += ys[k]
+	}
+	mx /= float64(len(xs))
+	my /= float64(len(ys))
+	var sxy, sxx float64
+	for k := range xs {
+		sxy += (xs[k] - mx) * (ys[k] - my)
+		sxx += (xs[k] - mx) * (xs[k] - mx)
+	}
+	if sxx == 0 {
+		return 0
+	}
+	slope := sxy / sxx
+	dev := 0.0
+	for k := range xs {
+		if d := math.Abs(ys[k] - (my + slope*(xs[k]-mx))); d > dev {
+			dev = d
+		}
+	}
+	return dev / 27_000
 }
 
 // FindFirstPTS returns the first PTS of every audio and video elementary stream.
