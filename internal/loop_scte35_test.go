@@ -231,8 +231,9 @@ func TestSCTE35PatcherWrap(t *testing.T) {
 }
 
 // injectSCTE35 copies a constant-rate fixture with an SCTE-35 PID added to its
-// PMT and each cue written into the first null packet at or after its packet.
-func injectSCTE35(t *testing.T, src string, pid int, cues map[int][]byte) string {
+// PMT and the cues written, in order, into successive null packets from packet
+// from on.
+func injectSCTE35(t *testing.T, src string, pid, from int, cues [][]byte) string {
 	t.Helper()
 	data, err := os.ReadFile(src)
 	if err != nil {
@@ -261,13 +262,14 @@ func injectSCTE35(t *testing.T, src string, pid int, cues map[int][]byte) string
 		b[o+1], b[o+2] = b[o+1]&0xf0|byte(secLen>>8), byte(secLen)
 		copy(b[end+len(entry):], gots.ComputeCRC(b[o:end+len(entry)]))
 	}
-	for at, sec := range cues {
-		for i := at * PacketSize; i+PacketSize <= len(data); i += PacketSize {
-			if tsPID(data[i:]) == stuffingPID {
-				copy(data[i:], packetizeSection(pid, sec))
-				break
-			}
+	i := from * PacketSize
+	for _, sec := range cues {
+		for ; i+PacketSize <= len(data) && tsPID(data[i:]) != stuffingPID; i += PacketSize {
 		}
+		if i+PacketSize > len(data) {
+			t.Fatal("not enough null packets for the cues")
+		}
+		copy(data[i:], packetizeSection(pid, sec))
 	}
 	path := filepath.Join(t.TempDir(), "scte35.ts")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
@@ -281,11 +283,12 @@ func injectSCTE35(t *testing.T, src string, pid int, cues map[int][]byte) string
 // loop duration and their event IDs advanced; a break past the loop end is dropped.
 func TestLoopSCTE35(t *testing.T) {
 	const pid = 500
-	path := injectSCTE35(t, "testdata/mpeg2_open_mp2.ts", pid, map[int][]byte{
-		260: spliceInsert(10, true, 190_000, 30_000), // ends at 220000, inside the loop
-		300: spliceInsert(11, true, 280_000, 40_000), // ends after the loop (302400)
-		400: spliceInsert(12, true, 230_000, 0),
-		500: spliceInsert(12, false, 260_000, 0),
+	// The loop is PTS 172800-302400, packets 252-626 (golden_scan_mpeg2_open_mp2.json).
+	path := injectSCTE35(t, "testdata/mpeg2_open_mp2.ts", pid, 260, [][]byte{
+		spliceInsert(10, true, 190_000, 30_000), // ends at 220000, inside the loop
+		spliceInsert(11, true, 280_000, 40_000), // ends after the loop
+		spliceInsert(12, true, 230_000, 0),
+		spliceInsert(12, false, 260_000, 0),
 	})
 	seg, plan, err := PrepareLoop(context.TODO(), path, 0, 0, 0)
 	if err != nil {

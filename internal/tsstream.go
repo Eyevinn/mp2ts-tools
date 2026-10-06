@@ -46,7 +46,7 @@ type PassThroughStream struct {
 type TSStream struct {
 	PMTPid             int
 	SCTE35Pid          int // -1 if none
-	PCRPid             int // -1 until a PCR-bearing PID is seen
+	PCRPid             int // the PMT's PCR_PID; else the first PCR-bearing PID; -1 if none
 	pmt                psi.PMT
 	ElStreams          map[int]*ElStream
 	PassThrough        []PassThroughStream
@@ -112,6 +112,9 @@ func InitTS(r io.ReadSeeker) (*TSStream, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ReadPMT: %w", err)
 	}
+	if ts.PCRPid, err = declaredPCRPid(r, ts.PMTPid); err != nil {
+		return nil, err
+	}
 	for _, e := range ts.pmt.ElementaryStreams() {
 		pid := e.ElementaryPid()
 		codec := codecFromStreamType(e.StreamType())
@@ -148,6 +151,35 @@ func InitTS(r io.ReadSeeker) (*TSStream, error) {
 		}
 	}
 	return ts, nil
+}
+
+// declaredPCRPid returns the PCR_PID of the first PMT section, or -1 if the PMT
+// declares none (0x1fff). gots does not expose it, so it is read from the packet.
+func declaredPCRPid(r io.ReadSeeker, pmtPid int) (int, error) {
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return -1, err
+	}
+	var b [PacketSize]byte
+	for {
+		if _, err := io.ReadFull(r, b[:]); err != nil {
+			return -1, nil
+		}
+		if tsPID(b[:]) != pmtPid || !tsPUSI(b[:]) {
+			continue
+		}
+		o := tsPayloadOffset(b[:])
+		if o >= PacketSize {
+			continue
+		}
+		o += 1 + int(b[o]) // pointer_field
+		if o+10 > PacketSize || b[o] != 0x02 {
+			continue
+		}
+		if pid := int(b[o+8]&0x1f)<<8 | int(b[o+9]); pid != stuffingPID {
+			return pid, nil
+		}
+		return -1, nil
+	}
 }
 
 // ProcessTSFile reads the whole file once, building continuity-counter history
