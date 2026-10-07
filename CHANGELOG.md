@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Nothing yet
+
+## [0.4.0] - 2026-10-09
+
 ### Added
 
+- New `mp2ts-timeshift` tool to shift all PTS/DTS/PCR values in a TS by an offset, e.g. to test timestamp wrap-around
 - New `mp2ts-loop` tool to loop a single-program TS seamlessly and forever
   - Scans for the longest loop bounded by a video random-access point (IDR, CRA for open-GOP HEVC, or an MPEG-2 I picture with sequence header)
   - Constant video frame rate and GOP duration, a loop of whole frame periods (even frame count at 59.94 fps), drift-free audio shifted per wrap by less than one audio frame, and a regenerated linear PCR for constant-rate streams
@@ -72,8 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - initial version of the repo
 - ts-info tool
 
-[Unreleased]: https://github.com/Eyevinn/mp2ts-tools/releases/tag/v0.3.0...HEAD
-[0.3.0]: https://github.com/Eyevinn/mp2ts-tools/releases/tag/v0.2.1...v0.3.0
-[0.2.1]: https://github.com/Eyevinn/mp2ts-tools/releases/tag/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/Eyevinn/mp2ts-tools/releases/tag/v0.1.0...v0.2.0
+[Unreleased]: https://github.com/Eyevinn/mp2ts-tools/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Eyevinn/mp2ts-tools/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/Eyevinn/mp2ts-tools/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/Eyevinn/mp2ts-tools/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/Eyevinn/mp2ts-tools/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Eyevinn/mp2ts-tools/releases/tag/v0.1.0
