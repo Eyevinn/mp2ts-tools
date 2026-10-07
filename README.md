@@ -171,8 +171,8 @@ If you have the source code you should be able to run a tool like
 ```
 
 Alternatively, you can use the Makefile to build the tools
-or make a coverage check. The Makefile will set the version depending
-on the Git commit used.
+or make a coverage check. The `-version` option reports the version Go
+embeds from the Git tag and commit (also for `go install`).
 
 ## Commits and ChangeLog
 
