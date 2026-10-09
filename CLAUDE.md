@@ -65,7 +65,7 @@ Every tool follows the same 3-function pattern in `main.go`:
 2. A parse function — Calls the appropriate `internal.Parse*()` function
 3. `main()` — Calls `internal.ParseParams(parseOptions)` then `internal.Execute(os.Stdout, o, inFile, parseFn)`. Execute handles context/SIGINT, file open/close, and error reporting.
 
-Tools: `mp2ts-info`, `mp2ts-nallister`, `mp2ts-pslister`, `mp2ts-extract`, `mp2ts-timeshift`, `mp2ts-pidfilter`, `mp2ts-prepare`, `mp2ts-loop`.
+Tools: `mp2ts-info`, `mp2ts-nallister`, `mp2ts-pslister`, `mp2ts-extract`, `mp2ts-timeshift`, `mp2ts-pidfilter`, `mp2ts-loop`.
 
 `mp2ts-loop` is the exception to the 3-function pattern: it has its own `Options`, scan/loop dispatch, and sinks (file/UDP) in `cmd/mp2ts-loop/main.go` rather than going through `Execute`.
 
