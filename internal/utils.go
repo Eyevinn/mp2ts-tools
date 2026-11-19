@@ -188,7 +188,7 @@ func ParseElementaryStreamInfo(es psi.PmtElementaryStream) *ElementaryStreamInfo
 		streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "AVC", Type: "video"}
 	case psi.PmtStreamTypeAac:
 		streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "AAC", Type: "audio"}
-	case pmtStreamTypeMpeg1Layer2, pmtStreamTypeMpeg2Audio:
+	case stMPEG1Audio, stMPEG2Audio:
 		streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "MP2", Type: "audio"}
 	case psi.PmtStreamTypeAc3:
 		streamInfo = &ElementaryStreamInfo{PID: pid, Codec: "AC-3", Type: "audio"}

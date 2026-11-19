@@ -1,50 +1,95 @@
 {
-  "file": "testdata/80s_with_ad.ts",
-  "totalPackets": 12929,
+  "input": "testdata/80s_with_ad.ts",
+  "packets": 12929,
+  "program": 1,
+  "pmtPid": 4096,
+  "pcrPid": 256,
   "video": {
     "pid": 256,
     "codec": "avc",
-    "pictures": 2399,
+    "pictures": 2400,
     "frameRate": "30",
-    "constantFrameRate": true,
-    "dtsStepTicks": {
-      "min": 3000,
-      "max": 3000,
-      "avg": 3000
-    },
-    "field": "frame",
-    "loopPointType": "IDR",
-    "loopPoints": 80,
-    "gopDurationTicks": {
-      "min": 90000,
-      "max": 90000,
-      "avg": 90000
-    },
-    "constantGop": true,
-    "firstPTS": 132000,
-    "lastPTS": 7329000,
-    "durationTicks": 7197000,
-    "maxLoopTicks": 7110000,
-    "maxLoopGops": 79
+    "accessPoints": {
+      "closed-gop": 80
+    }
   },
   "audio": [
     {
       "pid": 257,
-      "codec": "aac",
-      "pesCount": 176,
-      "frames": 3732,
+      "codec": "aac-adts",
       "sampleRate": 48000,
-      "frameDurTicks": 1920,
-      "nonPESAligned": false,
-      "pesStepTicks": {
-        "min": 32640,
-        "max": 42240,
-        "avg": 40714
-      },
-      "firstPTS": 126000,
-      "lastPTS": 7251120,
-      "durationTicks": 7125120
+      "pes": 177,
+      "frames": 3750,
+      "cutAt": "frame"
     }
   ],
-  "note": "cannot loop: not a constant-rate stream: its PCR is up to 1029 ms from a constant rate (variable-rate streams are not supported)"
+  "scte35Pids": [
+    1001
+  ],
+  "continuityErrors": {
+    "4096": 166
+  },
+  "loop": {
+    "accessPoint": "closed-gop",
+    "startPacket": 4,
+    "endPacket": 12742,
+    "startPts": 132000,
+    "endPts": 7242000,
+    "durationTicks": 7110000,
+    "durationMs": 79000,
+    "frames": 2370,
+    "pictures": 2370,
+    "gops": 79,
+    "frameRate": "30",
+    "wholeFrames": true,
+    "constantRate": false,
+    "bitrate": 242506,
+    "rateDeviationMs": 1651.044,
+    "windowMs": 79000,
+    "packetsPerLap": 12738,
+    "audio": [
+      {
+        "pid": 257,
+        "pes": 175,
+        "units": 3705,
+        "excessMs": 40,
+        "seamOffsetMs": -2.667
+      }
+    ],
+    "scte35": [
+      {
+        "pid": 1001,
+        "sections": 0,
+        "moved": 1,
+        "kept": 1,
+        "eventIdStep": 1,
+        "events": [
+          {
+            "kind": "splice_insert",
+            "eventId": 255,
+            "startPTS": 1032000,
+            "endPTS": 2832000,
+            "messages": 1,
+            "kept": true
+          }
+        ]
+      }
+    ]
+  },
+  "lap": {
+    "packets": 12740,
+    "strippedPackets": 0,
+    "removedNulls": 0,
+    "addedNulls": 0,
+    "addedPcrPackets": 1,
+    "seamMarks": 0,
+    "audioHeadCuts": 1,
+    "scte35InjectedPackets": 1,
+    "preamblePackets": 2
+  },
+  "warnings": [
+    "the source has 166 continuity errors (PID 4096: 166), the first at packet 78",
+    "variable-rate input (the PCR strays up to 1651 ms from a constant rate): packets keep their source timing, so a player must pace the output by its PCR",
+    "163 of the source's continuity errors are inside the loop and come back every lap"
+  ]
 }

@@ -58,23 +58,17 @@ func TestScanMPEG2AU(t *testing.T) {
 			true, false, true, true, mpeg2PicI, FieldFrame},
 	}
 	for _, c := range cases {
-		au := ScanAU(CODEC_MPEG2V, c.data)
-		if au.IsRAP != c.rap || au.IsIDR != c.idr || au.IsCRA != c.cra || au.HasSPS != c.seqHdr ||
-			au.PicType != c.picType || au.Field != c.field || !au.IsVCL {
-			t.Errorf("%s: ScanAU=%+v", c.name, au)
-		}
-		if got := au.PSComplete(CODEC_MPEG2V); got != c.seqHdr {
-			t.Errorf("%s: PSComplete=%v want %v", c.name, got, c.seqHdr)
-		}
-		if got := ScanRAP(CODEC_MPEG2V, c.data); got != au.RAPInfo {
-			t.Errorf("%s: ScanRAP=%+v differs from ScanAU", c.name, got)
+		pic := scanMPEG2AU(c.data)
+		if (pic.closedGOP || pic.openGOP) != c.rap || pic.closedGOP != c.idr || pic.openGOP != c.cra ||
+			pic.seqHeader != c.seqHdr || pic.picType != c.picType || pic.field != c.field || !pic.hasPicture {
+			t.Errorf("%s: scanMPEG2AU=%+v", c.name, pic)
 		}
 	}
 }
 
-// TestResolveMPEG2Leading checks that an open-GOP I picture stays open (CRA
-// class) only when a B-picture follows it in coding order, skipping the second
-// field of a field-coded I picture.
+// TestResolveMPEG2Leading checks that an open-GOP I picture stays open only
+// when a B-picture follows it in coding order, skipping the second field of a
+// field-coded I picture.
 func TestResolveMPEG2Leading(t *testing.T) {
 	openI := concat(m2vSeqHdr(), m2vGOP(false), m2vPic(mpeg2PicI), m2vPicExt(3), m2vSlice())
 	openITop := concat(m2vSeqHdr(), m2vGOP(false), m2vPic(mpeg2PicI), m2vPicExt(1), m2vSlice())
@@ -93,47 +87,18 @@ func TestResolveMPEG2Leading(t *testing.T) {
 		{"open I field, second field, then P", [][]byte{openITop, pField, p}, true},
 	}
 	for _, c := range cases {
-		st := &scanTrack{codec: CODEC_MPEG2V, mediaType: "video"}
-		for i, d := range c.aus {
-			if err := st.HandlePES(&PESData{PTS: int64(i) * 3600, HasPTS: true, Data: d}, false); err != nil {
-				t.Fatal(err)
-			}
+		idx := &streamIndex{videoCodec: CODEC_MPEG2V}
+		insp := newPictureInspector(CODEC_MPEG2V)
+		for _, d := range c.aus {
+			idx.pictures = append(idx.pictures, videoPicture{info: insp.inspect(d)})
 		}
-		first := st.pics[0]
-		if first.IsIDR != c.wantIDR || first.IsCRA == c.wantIDR || !first.IsRAP {
-			t.Errorf("%s: first picture %+v, want IsIDR=%v", c.name, first, c.wantIDR)
+		(&scanner{idx: idx}).promoteMPEG2ClosedGOPs()
+		want := apOpenGOP
+		if c.wantIDR {
+			want = apClosedGOP
 		}
-	}
-}
-
-func TestLoopPointClass(t *testing.T) {
-	idr := PicRecord{IsIDR: true, IsRAP: true}
-	cra := PicRecord{IsCRA: true, IsRAP: true}
-	other := PicRecord{}
-	cases := []struct {
-		name  string
-		codec Codec
-		pics  []PicRecord
-		want  string
-		count int
-	}{
-		{"IDR loop", CODEC_HEVC, []PicRecord{idr, other, idr, other, cra}, loopPointIDR, 2},
-		{"single IDR falls through to CRA", CODEC_HEVC, []PicRecord{idr, other, cra, other, cra, cra}, loopPointCRA, 3},
-		{"MPEG-2 closed", CODEC_MPEG2V, []PicRecord{idr, other, idr, idr}, loopPointClosedI, 3},
-		{"MPEG-2 first GOP closed, rest open", CODEC_MPEG2V, []PicRecord{idr, other, cra, other, cra}, loopPointOpenI, 2},
-		{"single IDR only", CODEC_AVC, []PicRecord{idr, other, other}, loopPointIDR, 1},
-		{"no loop points", CODEC_AVC, []PicRecord{other, other}, loopPointNone, 0},
-	}
-	for _, c := range cases {
-		label, eligible := loopPointClass(c.codec, c.pics)
-		n := 0
-		for _, p := range c.pics {
-			if eligible(p) {
-				n++
-			}
-		}
-		if label != c.want || n != c.count {
-			t.Errorf("%s: got %s with %d points, want %s with %d", c.name, label, n, c.want, c.count)
+		if got := idx.pictures[0].info.accessPoint; got != want {
+			t.Errorf("%s: first picture is %v, want %v", c.name, got, want)
 		}
 	}
 }
@@ -171,14 +136,15 @@ func TestMarkSeamBrokenLink(t *testing.T) {
 		orig := append([]byte(nil), seg...)
 		flagOff := PacketSize + 4 + 3 // byte 3 of the GOP header, in the second packet
 
-		marked := markSeamBrokenLink(seg, len(seg)/PacketSize, vpid)
+		ls := &loopSegment{packets: seg}
+		marked := markSeamPictures(ls, &streamIndex{videoPID: vpid, videoCodec: CODEC_MPEG2V}, 0)
 		if closed {
-			if marked || !bytes.Equal(seg, orig) {
+			if marked != 0 || !bytes.Equal(seg, orig) {
 				t.Errorf("closed GOP: marked=%v, segment changed=%v", marked, !bytes.Equal(seg, orig))
 			}
 			continue
 		}
-		if !marked || seg[flagOff] != mpeg2BrokenLinkBit {
+		if marked != 1 || seg[flagOff] != mpeg2BrokenLinkBit {
 			t.Fatalf("open GOP: marked=%v flag byte=0x%02x", marked, seg[flagOff])
 		}
 		seg[flagOff] = orig[flagOff]
@@ -188,28 +154,31 @@ func TestMarkSeamBrokenLink(t *testing.T) {
 	}
 }
 
-// TestPrepareLoopMPEG2OpenGOP builds the loop segment for the open-GOP fixture
-// and checks that the loop-point GOP header carries broken_link.
+// TestPrepareLoopMPEG2OpenGOP loops the open-GOP fixture and checks that the
+// loop-point GOP header carries broken_link in every lap.
 func TestPrepareLoopMPEG2OpenGOP(t *testing.T) {
-	seg, plan, err := PrepareLoop(context.TODO(), "testdata/mpeg2_open_mp2.ts", 0, 0, 0)
-	if err != nil {
-		t.Fatal(err)
+	const laps = 3
+	l, out := loopFile(t, "testdata/mpeg2_open_mp2.ts", LoopOptions{}, laps)
+	if lp := l.Report.Loop; lp.AccessPoint != "open-gop" || lp.GOPs != 3 || l.Report.Lap.SeamMarks != 1 {
+		t.Fatalf("loop %+v, lap %+v", lp, l.Report.Lap)
 	}
-	if plan.LoopPointType != loopPointOpenI || plan.NumGOPs != 3 {
-		t.Fatalf("plan: type %s, %d GOPs", plan.LoopPointType, plan.NumGOPs)
+	n := 0
+	for _, r := range collectPES(out) {
+		if r.pid != 256 {
+			continue
+		}
+		if k := bytes.Index(r.payload, []byte{0, 0, 1, mpeg2GroupStart}); k >= 0 && k+7 < len(r.payload) &&
+			r.payload[k+7]&mpeg2BrokenLinkBit != 0 {
+			n++
+		}
 	}
-	buf, _ := firstAUBytes(seg.Data, seg.NumPackets, seg.VideoPID)
-	k := bytes.Index(buf, []byte{0, 0, 1, mpeg2GroupStart})
-	if k < 0 || k+7 >= len(buf) {
-		t.Fatal("no GOP header in the loop-point access unit")
-	}
-	if b3 := buf[k+7]; b3&mpeg2ClosedGOPBit != 0 || b3&mpeg2BrokenLinkBit == 0 {
-		t.Errorf("GOP flags byte 0x%02x: want open GOP with broken_link", b3)
+	if n != laps {
+		t.Errorf("%d GOP headers with broken_link in %d laps", n, laps)
 	}
 }
 
 // TestRefuseLoopWithoutPTS clears the PTS of one mid-stream video or audio PES in
-// a copy of the MPEG-2 fixture: the scan must report it and PrepareLoop refuse it.
+// a copy of the MPEG-2 fixture: PrepareLoop must refuse it.
 func TestRefuseLoopWithoutPTS(t *testing.T) {
 	src, err := os.ReadFile("testdata/mpeg2_open_mp2.ts")
 	if err != nil {
@@ -234,14 +203,7 @@ func TestRefuseLoopWithoutPTS(t *testing.T) {
 		if err := os.WriteFile(path, data, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		rep, err := Scan(context.TODO(), path, 0, 0, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if rep.Loop != nil || !strings.Contains(rep.Note, "without a PTS") {
-			t.Errorf("pid %d: scan loop=%v note=%q, want refusal", pid, rep.Loop, rep.Note)
-		}
-		if _, _, err := PrepareLoop(context.TODO(), path, 0, 0, 0); err == nil || !strings.Contains(err.Error(), "without a PTS") {
+		if _, err := PrepareLoop(context.TODO(), path, LoopOptions{}); err == nil || !strings.Contains(err.Error(), "carry no PTS") {
 			t.Errorf("pid %d: PrepareLoop err=%v, want refusal", pid, err)
 		}
 	}

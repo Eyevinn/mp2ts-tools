@@ -1,50 +1,68 @@
 {
-  "file": "testdata/obs_hevc_aac.ts",
-  "totalPackets": 595,
+  "input": "testdata/obs_hevc_aac.ts",
+  "packets": 595,
+  "program": 1,
+  "pmtPid": 4096,
+  "pcrPid": 256,
   "video": {
     "pid": 256,
     "codec": "hevc",
-    "pictures": 59,
+    "pictures": 60,
     "frameRate": "30",
-    "constantFrameRate": true,
-    "dtsStepTicks": {
-      "min": 3000,
-      "max": 3000,
-      "avg": 3000
-    },
-    "field": "frame",
-    "loopPointType": "IDR",
-    "loopPoints": 2,
-    "gopDurationTicks": {
-      "min": 90000,
-      "max": 90000,
-      "avg": 90000
-    },
-    "constantGop": true,
-    "firstPTS": 1920,
-    "lastPTS": 175920,
-    "durationTicks": 174000,
-    "maxLoopTicks": 90000,
-    "maxLoopGops": 1
+    "accessPoints": {
+      "closed-gop": 2
+    }
   },
   "audio": [
     {
       "pid": 257,
-      "codec": "aac",
-      "pesCount": 94,
-      "frames": 94,
+      "codec": "aac-adts",
       "sampleRate": 48000,
-      "frameDurTicks": 1920,
-      "nonPESAligned": false,
-      "pesStepTicks": {
-        "min": 1920,
-        "max": 1920,
-        "avg": 1920
-      },
-      "firstPTS": 0,
-      "lastPTS": 178560,
-      "durationTicks": 178560
+      "pes": 95,
+      "frames": 95,
+      "cutAt": "frame"
     }
   ],
-  "note": "cannot loop: not a constant-rate stream: its PCR is up to 236 ms from a constant rate (variable-rate streams are not supported)"
+  "continuityErrors": {},
+  "loop": {
+    "accessPoint": "closed-gop",
+    "startPacket": 3,
+    "endPacket": 292,
+    "startPts": 1920,
+    "endPts": 91920,
+    "durationTicks": 90000,
+    "durationMs": 1000,
+    "frames": 30,
+    "pictures": 30,
+    "gops": 1,
+    "frameRate": "30",
+    "wholeFrames": true,
+    "constantRate": false,
+    "bitrate": 448906,
+    "rateDeviationMs": 387.223,
+    "windowMs": 1000,
+    "packetsPerLap": 289,
+    "audio": [
+      {
+        "pid": 257,
+        "pes": 48,
+        "units": 48,
+        "excessMs": 24,
+        "seamOffsetMs": 0
+      }
+    ]
+  },
+  "lap": {
+    "packets": 289,
+    "strippedPackets": 0,
+    "removedNulls": 0,
+    "addedNulls": 0,
+    "addedPcrPackets": 0,
+    "seamMarks": 0,
+    "audioHeadCuts": 0,
+    "preamblePackets": 2
+  },
+  "warnings": [
+    "variable-rate input (the PCR strays up to 387 ms from a constant rate): packets keep their source timing, so a player must pace the output by its PCR"
+  ]
 }

@@ -1,15 +1,18 @@
 package internal
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
-	"os"
 	"sort"
-	"strconv"
+	"strings"
+
+	"github.com/Comcast/gots/v2"
 )
 
 // FieldParity describes whether a coded picture is a full frame or a single
-// field (for interlaced / field-coded streams such as field-per-PES HEVC).
+// field.
 type FieldParity int
 
 const (
@@ -32,444 +35,943 @@ func (f FieldParity) String() string {
 	}
 }
 
-// PicRecord is the per-coded-picture (or per-field) summary produced by the scan
-// pass. It carries everything the loop-point selection needs, including hooks
-// for interlace (Field) and GDR (HasRecovery) that are populated as those
-// features are implemented.
-type PicRecord struct {
-	PTS         int64
-	DTS         int64
-	StartPktNr  uint32
-	RAI         bool
-	IsIDR       bool
-	IsCRA       bool
-	IsRAP       bool
-	IsRASL      bool // HEVC leading picture; must be dropped at a CRA loop seam
-	HasRecovery bool // recovery_point SEI (GDR) — detection TBD
-	PSPresent   bool // VPS/SPS/PPS carried in this access unit
-	Field       FieldParity
+// payloadUnit is a PES packet or PSI section as carried in TS packets. Only
+// packets with payload count, so adaptation-field-only packets (PCR carriers)
+// never make a unit look longer than it is.
+type payloadUnit struct {
+	first int // the packet with payload_unit_start_indicator
+	last  int
 }
 
-// AudioPESRec is the per-audio-PES summary produced by the scan pass.
-type AudioPESRec struct {
-	PTS        int64
-	DTS        int64
-	StartPktNr uint32
-	PayloadLen int
+type videoPicture struct {
+	firstPacket int
+	pts, dts    int64 // unwrapped, 90 kHz
+	info        pictureInfo
 }
 
-// scanTrack collects per-PES scan records for one elementary stream.
-type scanTrack struct {
+// audioFrame is the smallest piece of audio a lap can end on: one coded frame,
+// or a whole PES for audio whose frames are not parsed.
+type audioFrame struct {
+	start     int64 // unwrapped, in units of 1 / (90 kHz * timeScale)
+	duration  int64 // same unit
+	endOffset int   // PES byte just past the frame, counted from the PES start code
+}
+
+// payloadChunk is where the bytes of a PES lie: the PES byte just past each
+// packet's payload.
+type payloadChunk struct {
+	packet    int
+	endOffset int
+}
+
+type audioPES struct {
+	firstPacket int
+	pts         int64 // unwrapped, 90 kHz
+	firstFrame  int   // into audioStream.frames
+	frameCount  int
+	firstChunk  int // into audioStream.chunks
+	chunkCount  int
+}
+
+type audioStream struct {
 	pid        int
-	codec      Codec
-	mediaType  string
-	pics       []PicRecord
-	audio      []AudioPESRec
-	framer     AudioFramer // audio only, codec-specific (AAC for now)
-	frames     int         // total audio frames seen
-	nonAligned bool        // any audio frame straddles a PES boundary
-	splitErrs  int         // audio PES that failed to split
-	noPTS      int         // PES without a PTS; such streams are not looped
-
-	// MPEG-2 only: an open-GOP I picture (pics[openIdx]) waiting for the next
-	// coded picture to show whether it has leading B-pictures.
-	openPending   bool
-	openIdx       int
-	openSkipField bool // the next PES is the I picture's second field
+	streamType byte
+	codec      audioCodec
+	sampleRate int
+	// timeScale: audio times are in units of 1 / (90 kHz * timeScale), the
+	// sample rate when frames are parsed, so frame durations are exact, and 1
+	// otherwise.
+	timeScale int64
+	// frameLevel: laps end on frame boundaries; false: on PES boundaries.
+	frameLevel bool
+	pes        []audioPES
+	frames     []audioFrame
+	chunks     []payloadChunk
 }
 
-// HandlePES implements PESHandler for the scan pass. It copies the fields it
-// needs out of the (reused) PESData; it must not retain p.Data.
-func (s *scanTrack) HandlePES(p *PESData, last bool) error {
-	if last {
-		return nil // the final buffered PES may be truncated at EOF
+type pcrSample struct {
+	packet int
+	pcr    int64 // unwrapped, 27 MHz
+}
+
+// continuityError is a packet whose continuity counter does not follow its
+// PID's previous one.
+type continuityError struct {
+	packet int
+	pid    int
+}
+
+// PassThroughStream is an elementary stream that is neither the looped video nor
+// audio (e.g. SMPTE-2038 ANC data or subtitles). Its packets stay where they
+// are, with their timestamps advanced by the loop duration each lap.
+type PassThroughStream struct {
+	PID        int    `json:"pid"`
+	StreamType uint8  `json:"streamType"`
+	Label      string `json:"label"`
+}
+
+// streamIndex is everything the loop needs to know about a TS, from one pass
+// over it.
+type streamIndex struct {
+	packetCount   int
+	programNumber int
+	pmtPID        int
+	pcrPID        int
+	videoPID      int
+	videoCodec    Codec
+	pictures      []videoPicture // decode order
+	audio         []audioStream
+	scte35PIDs    []int
+	passThrough   []PassThroughStream
+	pcrSamples    []pcrSample
+	// discontinuities are packets of the program with discontinuity_indicator set.
+	discontinuities []int
+	// nullsBefore[i] is the number of null packets among packets [0, i).
+	nullsBefore []uint32
+	units       map[int][]payloadUnit
+	// continuityErrors are in the source, in packet order, on every PID.
+	continuityErrors []continuityError
+	// scte35Sections are the splice_info_sections per SCTE-35 PID, with their
+	// byte positions in the input.
+	scte35Sections map[int][]SCTE35Section
+	warnings       []string
+}
+
+// The scan's limits.
+const (
+	// maxInvalidPerMillion: a capture with a few corrupt packets still loops;
+	// more than this is not TS.
+	maxInvalidPerMillion = 10_000
+	// btsProbePackets: packets at the start whose sync bytes must all be 204
+	// bytes apart for the input to be a BTS.
+	btsProbePackets = 8
+	btsPacketSize   = 204
+)
+
+// isBTS reports an ISDB-T BTS, which follows each TS packet with 16 bytes of
+// ISDB-T information and parity, so its sync bytes are 204 bytes apart, not 188.
+func isBTS(data []byte) bool {
+	if len(data) < btsProbePackets*btsPacketSize {
+		return false
 	}
-	if !p.HasPTS {
-		s.noPTS++ // counted and skipped: requirePTS refuses to loop the stream
+	btsAligned, tsAligned := true, true
+	for i := 1; i < btsProbePackets; i++ {
+		btsAligned = btsAligned && data[i*btsPacketSize] == syncByte
+		tsAligned = tsAligned && data[i*PacketSize] == syncByte
+	}
+	return btsAligned && !tsAligned
+}
+
+// psiCollector puts together the first section of a PID's sections.
+type psiCollector struct {
+	buf  []byte
+	open bool
+}
+
+// add feeds a packet of the PID and returns a section that completes in it, if
+// one does. Only the first section that starts in a packet is read.
+func (c *psiCollector) add(b []byte) []byte {
+	off := tsPayloadOffset(b)
+	if off >= PacketSize {
 		return nil
 	}
-	switch s.mediaType {
-	case "video":
-		au := ScanAU(s.codec, p.Data)
-		field := FieldFrame // TODO: detect field parity for interlaced AVC/HEVC
-		if s.codec == CODEC_MPEG2V {
-			s.resolveMPEG2Leading(au)
-			field = au.Field
-		}
-		s.pics = append(s.pics, PicRecord{
-			PTS:        p.PTS,
-			DTS:        p.DTS,
-			StartPktNr: p.StartPktNr,
-			RAI:        p.RAI,
-			IsIDR:      au.IsIDR,
-			IsCRA:      au.IsCRA,
-			IsRAP:      au.IsRAP,
-			IsRASL:     au.IsRASL,
-			PSPresent:  au.PSComplete(s.codec),
-			Field:      field,
-		})
-		if s.codec == CODEC_MPEG2V && au.IsCRA {
-			s.openPending, s.openIdx = true, len(s.pics)-1
-			s.openSkipField = au.Field == FieldTop || au.Field == FieldBottom
-		}
-	case "audio":
-		s.audio = append(s.audio, AudioPESRec{
-			PTS:        p.PTS,
-			DTS:        p.DTS,
-			StartPktNr: p.StartPktNr,
-			PayloadLen: p.PayloadLength,
-		})
-		// Frame-accurate audio parsing. Setting p.AlignOffset lets ElStream carry
-		// a straddling frame into the next PES.
-		if s.framer == nil {
-			s.framer = newAudioFramer(s.codec)
-		}
-		if s.framer != nil {
-			frames, missing, err := s.framer.Split(p.Data, p.PayloadLength, p.AlignOffset, p.PTS)
-			if err != nil {
-				s.splitErrs++
-				p.AlignOffset = 0
-			} else {
-				s.frames += len(frames)
-				if missing > 0 {
-					s.nonAligned = true
-				}
-				p.AlignOffset = missing
+	if tsPUSI(b) {
+		start := off + 1 + int(b[off]) // after pointer_field
+		if c.open {
+			c.buf = append(c.buf, b[off+1:min(start, PacketSize)]...)
+			if s := c.complete(); s != nil {
+				return s
 			}
 		}
+		if start >= PacketSize {
+			c.open = false
+			return nil
+		}
+		c.buf, c.open = append(c.buf[:0], b[start:]...), true
+	} else if c.open {
+		c.buf = append(c.buf, b[off:]...)
+	}
+	return c.complete()
+}
+
+func (c *psiCollector) complete() []byte {
+	if !c.open || len(c.buf) < 3 {
+		return nil
+	}
+	if c.buf[0] == stuffByte {
+		c.open = false
+		return nil
+	}
+	n := 3 + int(binary.BigEndian.Uint16(c.buf[1:3])&0x0fff)
+	if len(c.buf) < n {
+		return nil
+	}
+	c.open = false
+	return c.buf[:n]
+}
+
+// validSection reports a current section of the table with section syntax and a
+// correct CRC.
+func validSection(s []byte, tableID byte) bool {
+	return len(s) >= 12 && s[0] == tableID && s[1]&0x80 != 0 && s[5]&0x01 != 0 &&
+		bytes.Equal(gots.ComputeCRC(s[:len(s)-4]), s[len(s)-4:])
+}
+
+type pmtDescriptor struct {
+	tag  byte
+	data []byte
+}
+
+type pmtStream struct {
+	streamType  byte
+	pid         int
+	descriptors []pmtDescriptor
+}
+
+type program struct {
+	number        int
+	pmtPID        int
+	pcrPID        int
+	streams       []pmtStream // by PID
+	otherPrograms []int       // in the PAT, not looped
+}
+
+// parsePMT reads a PMT section. A descriptor that runs past its loop ends that
+// loop; the PMT is refused only when its own lengths run past the section.
+func parsePMT(s []byte) ([]pmtStream, int, bool) {
+	end := len(s) - 4
+	pcrPID := int(binary.BigEndian.Uint16(s[8:10]) & 0x1fff)
+	pos := 12 + int(binary.BigEndian.Uint16(s[10:12])&0x0fff)
+	if pos > end {
+		return nil, 0, false
+	}
+	var streams []pmtStream
+	for pos < end {
+		if pos+5 > end {
+			return nil, 0, false
+		}
+		es := pmtStream{streamType: s[pos], pid: int(binary.BigEndian.Uint16(s[pos+1:pos+3]) & 0x1fff)}
+		infoEnd := pos + 5 + int(binary.BigEndian.Uint16(s[pos+3:pos+5])&0x0fff)
+		if infoEnd > end {
+			return nil, 0, false
+		}
+		for d := pos + 5; d+2 <= infoEnd; {
+			n := int(s[d+1])
+			if d+2+n > infoEnd {
+				break
+			}
+			es.descriptors = append(es.descriptors, pmtDescriptor{tag: s[d], data: s[d+2 : d+2+n]})
+			d += 2 + n
+		}
+		streams = append(streams, es)
+		pos = infoEnd
+	}
+	sort.SliceStable(streams, func(i, j int) bool { return streams[i].pid < streams[j].pid })
+	return streams, pcrPID, true
+}
+
+// findProgram reads the first program of the PAT and its PMT.
+func findProgram(data []byte, n int) (program, error) {
+	var p program
+	known := false
+	var pat, pmt psiCollector
+	for i := 0; i < n; i++ {
+		b := data[i*PacketSize : (i+1)*PacketSize]
+		if b[0] != syncByte {
+			continue
+		}
+		pid := tsPID(b)
+		switch {
+		case pid == 0 && !known:
+			s := pat.add(b)
+			if s == nil || !validSection(s, 0x00) {
+				continue
+			}
+			for e := 8; e+4 <= len(s)-4; e += 4 {
+				number := int(binary.BigEndian.Uint16(s[e : e+2]))
+				if number == 0 { // it points at the NIT
+					continue
+				}
+				if !known {
+					p = program{number: number, pmtPID: int(binary.BigEndian.Uint16(s[e+2:e+4]) & 0x1fff)}
+					known = true
+				} else {
+					p.otherPrograms = append(p.otherPrograms, number)
+				}
+			}
+		case known && pid == p.pmtPID:
+			s := pmt.add(b)
+			if s == nil || !validSection(s, 0x02) || int(binary.BigEndian.Uint16(s[3:5])) != p.number {
+				continue
+			}
+			streams, pcrPID, ok := parsePMT(s)
+			if !ok {
+				continue
+			}
+			p.streams, p.pcrPID = streams, pcrPID
+			return p, nil
+		}
+	}
+	if known {
+		return p, fmt.Errorf("no PMT found")
+	}
+	return p, fmt.Errorf("no PAT found")
+}
+
+func otherProgramsWarning(p program) string {
+	var others []string
+	for _, n := range p.otherPrograms {
+		others = append(others, fmt.Sprint(n))
+	}
+	one := len(p.otherPrograms) == 1
+	which, verb, own := "programs", "are", "their"
+	if one {
+		which, verb, own = "program", "is", "its"
+	}
+	return fmt.Sprintf("only program %d of the %d in the PAT is looped; %s %s %s cut at the same points, not %s own, "+
+		"so %s video, audio and PCR break at every seam",
+		p.number, len(p.otherPrograms)+1, which, strings.Join(others, ", "), verb, own, own)
+}
+
+// Stream types and descriptors the scan tells streams apart by.
+const (
+	stMPEG1Video    = 0x01
+	stMPEG2Video    = 0x02
+	stMPEG1Audio    = 0x03
+	stMPEG2Audio    = 0x04
+	stPrivateData   = 0x06
+	stADTS          = 0x0f
+	stLATM          = 0x11
+	stID3           = 0x15
+	stAVC           = 0x1b
+	stHEVC          = 0x24
+	stAC3           = 0x81
+	stSCTE35        = 0x86
+	stEAC3          = 0x87
+	descRegistation = 0x05
+	descTeletext    = 0x56
+	descSubtitling  = 0x59
+	descAC3         = 0x6a
+	descEAC3        = 0x7a
+	descExtension   = 0x7f
+	descANC         = 0xc4 // SMPTE-2038 ancillary data descriptor
+	extAC4          = 0x15
+)
+
+func videoCodecOf(streamType byte) (Codec, bool) {
+	switch streamType {
+	case stMPEG1Video, stMPEG2Video: // MPEG-1 video is a subset of H.262
+		return CODEC_MPEG2V, true
+	case stAVC:
+		return CODEC_AVC, true
+	case stHEVC:
+		return CODEC_HEVC, true
+	}
+	return CODEC_UNKNOWN, false
+}
+
+// registration reports a registration descriptor with the format_identifier.
+func (es pmtStream) registration(format string) bool {
+	for _, d := range es.descriptors {
+		if d.tag == descRegistation && len(d.data) >= 4 && string(d.data[:4]) == format {
+			return true
+		}
+	}
+	return false
+}
+
+func (es pmtStream) hasDescriptor(tag byte) bool {
+	for _, d := range es.descriptors {
+		if d.tag == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// isAC4 reports AC-4 as DVB carries it: private data with an AC-4 descriptor, an
+// extension descriptor (ETSI EN 300 468, 6.4.1).
+func (es pmtStream) isAC4() bool {
+	if es.streamType != stPrivateData {
+		return false
+	}
+	for _, d := range es.descriptors {
+		if d.tag == descExtension && len(d.data) > 0 && d.data[0] == extAC4 {
+			return true
+		}
+	}
+	return false
+}
+
+// audioCodecOf returns how the frames of an audio stream are read, and false
+// for a stream that is not audio.
+func audioCodecOf(es pmtStream) (audioCodec, bool) {
+	switch es.streamType {
+	case stMPEG1Audio, stMPEG2Audio:
+		return audioMPEG, true
+	case stADTS:
+		return audioADTS, true
+	case stAC3, stEAC3:
+		return audioAC3, true
+	case stLATM:
+		return audioUnknown, true
+	case stPrivateData:
+		switch {
+		case es.hasDescriptor(descAC3), es.hasDescriptor(descEAC3), es.registration("AC-3"), es.registration("EAC3"):
+			return audioAC3, true
+		case es.registration("BSSD"), es.isAC4(): // S302M, AC-4: laps end on PES boundaries
+			return audioUnknown, true
+		}
+	}
+	return audioUnknown, false
+}
+
+// passThroughLabel names a stream that is neither looped video nor audio.
+func passThroughLabel(es pmtStream) string {
+	switch {
+	case es.hasDescriptor(descANC) || es.registration("VANC"):
+		return "smpte-2038"
+	case es.hasDescriptor(descTeletext):
+		return "teletext"
+	case es.hasDescriptor(descSubtitling):
+		return "dvb-subtitles"
+	case es.streamType == stID3:
+		return "id3"
+	case es.streamType == stPrivateData:
+		return "private"
+	}
+	if c, ok := videoCodecOf(es.streamType); ok {
+		return c.String()
+	}
+	return fmt.Sprintf("stream type 0x%02x", es.streamType)
+}
+
+// carriesSections reports stream types that carry sections rather than PES
+// (ISO/IEC 13818-1 table 2-34, SCTE 27, SCTE 35, ATSC A/90).
+func carriesSections(streamType byte) bool {
+	switch streamType {
+	case 0x05, // private sections
+		0x0a, // DSM-CC multi-protocol encapsulation
+		0x0b, // DSM-CC U-N messages
+		0x0c, // DSM-CC stream descriptors
+		0x0d, // DSM-CC sections
+		0x13, // SL-packetized stream in sections
+		0x14, // DSM-CC synchronized download protocol
+		0x16, // metadata in sections
+		0x17, // metadata in DSM-CC data carousel
+		0x18, // metadata in DSM-CC object carousel
+		0x19, // metadata in synchronized download protocol
+		0x82, // SCTE 27 subtitles
+		0x86, // SCTE-35
+		0x95: // ATSC data service table
+		return true
+	}
+	return false
+}
+
+type pidRole uint8
+
+const (
+	roleOther pidRole = iota
+	roleVideo
+	roleAudio
+)
+
+type audioAssembly struct {
+	open       bool
+	headerSize int
+	bytes      []byte // payload after the PES header
+	endOffset  int
+	unparsable bool // frames straddle PES or the sample rate changes
+	pts        unwrapper
+}
+
+type pidContinuity struct {
+	seen     bool
+	last     byte
+	repeated bool // the last packet was sent twice
+}
+
+type misplacedPES struct {
+	count       int
+	firstPacket int
+}
+
+type scanner struct {
+	idx            *streamIndex
+	role           [numPIDs]pidRole
+	audioSlot      [numPIDs]int
+	carriesPES     [numPIDs]bool
+	continuity     [numPIDs]pidContinuity
+	audio          []audioAssembly
+	scte35         map[int]*sectionAssembler
+	pcrUnwrap      unwrapper
+	videoPTS       unwrapper
+	videoDTS       unwrapper
+	videoOpen      bool
+	videoPicture   videoPicture
+	videoBytes     []byte
+	inspector      *pictureInspector
+	nulls          uint32
+	invalid        int
+	corrupt        int
+	pesWithoutPTS  int
+	unreadablePES  int
+	misplacedStart map[int]*misplacedPES
+}
+
+func newScanner(idx *streamIndex, p program) *scanner {
+	s := &scanner{
+		idx:            idx,
+		scte35:         make(map[int]*sectionAssembler),
+		pcrUnwrap:      unwrapper{wrap: pcrWrapU},
+		videoPTS:       unwrapper{wrap: ptsWrapU},
+		videoDTS:       unwrapper{wrap: ptsWrapU},
+		misplacedStart: make(map[int]*misplacedPES),
+	}
+	idx.programNumber, idx.pmtPID, idx.pcrPID, idx.videoPID = p.number, p.pmtPID, p.pcrPID, -1
+	if len(p.otherPrograms) > 0 {
+		idx.warnings = append(idx.warnings, otherProgramsWarning(p))
+	}
+	for _, es := range p.streams {
+		if codec, ok := videoCodecOf(es.streamType); ok && idx.videoPID < 0 {
+			idx.videoPID, idx.videoCodec = es.pid, codec
+			s.role[es.pid] = roleVideo
+		} else if codec, ok := audioCodecOf(es); ok {
+			s.audioSlot[es.pid] = len(idx.audio)
+			idx.audio = append(idx.audio, audioStream{pid: es.pid, streamType: es.streamType, codec: codec, timeScale: 1})
+			s.audio = append(s.audio, audioAssembly{pts: unwrapper{wrap: ptsWrapU}})
+			s.role[es.pid] = roleAudio
+		} else if es.streamType == stSCTE35 {
+			idx.scte35PIDs = append(idx.scte35PIDs, es.pid)
+			s.scte35[es.pid] = &sectionAssembler{}
+		} else {
+			idx.passThrough = append(idx.passThrough,
+				PassThroughStream{PID: es.pid, StreamType: es.streamType, Label: passThroughLabel(es)})
+		}
+		s.carriesPES[es.pid] = !carriesSections(es.streamType)
+	}
+	return s
+}
+
+func (s *scanner) addPacket(i int, b []byte) {
+	s.idx.nullsBefore = append(s.idx.nullsBefore, s.nulls)
+	if b[0] != syncByte {
+		s.invalid++
+		return
+	}
+	if tsOversizedAF(b) {
+		s.corrupt++
+		return
+	}
+	pid := tsPID(b)
+	if pid == nullPID {
+		s.nulls++
+		return
+	}
+	s.checkContinuity(i, pid, b)
+	s.checkPESStart(i, pid, b)
+	s.trackUnits(i, pid, b)
+	if (pid == s.idx.pcrPID || s.role[pid] != roleOther) && tsAFFlags(b)&afFlagDiscontinuity != 0 {
+		s.idx.discontinuities = append(s.idx.discontinuities, i)
+	}
+	if pid == s.idx.pcrPID && tsCarriesPCR(b) {
+		s.idx.pcrSamples = append(s.idx.pcrSamples,
+			pcrSample{packet: i, pcr: s.pcrUnwrap.unwrap(readPCR(b[pcrFieldOffset:]))})
+	}
+	if a, ok := s.scte35[pid]; ok {
+		a.add(b, i*PacketSize)
+	}
+	switch s.role[pid] {
+	case roleVideo:
+		s.addVideoPacket(i, b)
+	case roleAudio:
+		s.addAudioPacket(s.audioSlot[pid], i, b)
+	}
+}
+
+// checkContinuity follows ISO/IEC 13818-1 2.4.3.3: the counter steps by one on
+// each packet with payload, a packet may be sent twice in a row, and a
+// discontinuity_indicator lets it start anew.
+func (s *scanner) checkContinuity(i, pid int, b []byte) {
+	if tsTransportErr(b) || !tsHasPayload(b) {
+		return
+	}
+	c := &s.continuity[pid]
+	cc := tsCC(b)
+	restarted := tsAFFlags(b)&afFlagDiscontinuity != 0
+	repeated := false
+	if c.seen && !restarted && cc != (c.last+1)&0x0f {
+		repeated = cc == c.last && !c.repeated
+		if !repeated {
+			s.idx.continuityErrors = append(s.idx.continuityErrors, continuityError{packet: i, pid: pid})
+		}
+	}
+	*c = pidContinuity{seen: true, last: cc, repeated: repeated}
+}
+
+// checkPESStart checks that each payload unit of an elementary stream starts
+// with a PES header: the laps are cut at TS packets, so PES that start inside
+// one cannot be looped.
+func (s *scanner) checkPESStart(i, pid int, b []byte) {
+	if !s.carriesPES[pid] || !tsPUSI(b) || !tsHasPayload(b) || tsScrambled(b) || tsTransportErr(b) {
+		return
+	}
+	off := tsPayloadOffset(b)
+	if off+4 <= PacketSize && b[off] == 0 && b[off+1] == 0 && b[off+2] == 1 && b[off+3] >= 0xbc {
+		return
+	}
+	m, ok := s.misplacedStart[pid]
+	if !ok {
+		m = &misplacedPES{firstPacket: i}
+		s.misplacedStart[pid] = m
+	}
+	m.count++
+}
+
+func (s *scanner) trackUnits(i, pid int, b []byte) {
+	if !tsHasPayload(b) {
+		return
+	}
+	units := s.idx.units[pid]
+	switch {
+	case tsPUSI(b):
+		s.idx.units[pid] = append(units, payloadUnit{first: i, last: i})
+	case len(units) > 0:
+		units[len(units)-1].last = i
+	}
+}
+
+func (s *scanner) addVideoPacket(i int, b []byte) {
+	if !tsHasPayload(b) {
+		return
+	}
+	if !tsPUSI(b) {
+		if s.videoOpen {
+			s.videoBytes = append(s.videoBytes, b[tsPayloadOffset(b):]...)
+		}
+		return
+	}
+	s.finishVideoPES()
+	h, ok := findPESHeader(b)
+	if !ok {
+		s.unreadablePES++
+		return
+	}
+	if h.pts < 0 {
+		s.pesWithoutPTS++
+		return
+	}
+	s.videoOpen = true
+	s.videoPicture = videoPicture{firstPacket: i, pts: s.videoPTS.unwrap(readTimestamp(b[h.pts:]))}
+	s.videoPicture.dts = s.videoPicture.pts
+	if h.dts >= 0 {
+		s.videoPicture.dts = s.videoDTS.unwrap(readTimestamp(b[h.dts:]))
+	}
+	s.videoBytes = append(s.videoBytes[:0], b[h.start+h.size:]...)
+}
+
+func (s *scanner) finishVideoPES() {
+	if !s.videoOpen {
+		return
+	}
+	s.videoOpen = false
+	if s.inspector == nil {
+		s.inspector = newPictureInspector(s.idx.videoCodec)
+	}
+	s.videoPicture.info = s.inspector.inspect(s.videoBytes)
+	s.idx.pictures = append(s.idx.pictures, s.videoPicture)
+}
+
+func (s *scanner) addAudioPacket(slot, i int, b []byte) {
+	a := &s.audio[slot]
+	st := &s.idx.audio[slot]
+	if !tsHasPayload(b) {
+		return
+	}
+	off := tsPayloadOffset(b)
+	if !tsPUSI(b) {
+		if a.open {
+			a.endOffset += PacketSize - off
+			st.chunks = append(st.chunks, payloadChunk{packet: i, endOffset: a.endOffset})
+			a.bytes = append(a.bytes, b[off:]...)
+		}
+		return
+	}
+	s.finishAudioPES(slot, false)
+	h, ok := findPESHeader(b)
+	if !ok {
+		s.unreadablePES++
+		return
+	}
+	if h.pts < 0 {
+		s.pesWithoutPTS++
+		return
+	}
+	a.open, a.headerSize, a.endOffset = true, h.size, PacketSize-off
+	st.pes = append(st.pes, audioPES{
+		firstPacket: i,
+		pts:         a.pts.unwrap(readTimestamp(b[h.pts:])),
+		firstFrame:  len(st.frames),
+		firstChunk:  len(st.chunks),
+	})
+	st.chunks = append(st.chunks, payloadChunk{packet: i, endOffset: a.endOffset})
+	a.bytes = append(a.bytes[:0], b[h.start+h.size:]...)
+}
+
+func (s *scanner) finishAudioPES(slot int, endOfStream bool) {
+	a := &s.audio[slot]
+	st := &s.idx.audio[slot]
+	if !a.open {
+		return
+	}
+	a.open = false
+	pes := &st.pes[len(st.pes)-1]
+	pes.chunkCount = len(st.chunks) - pes.firstChunk
+	if st.codec == audioUnknown || a.unparsable {
+		return
+	}
+	payload := a.bytes
+	off := 0
+	elapsed := int64(0)
+	for off < len(payload) {
+		h, ok := parseAudioFrameHeader(st.codec, payload[off:])
+		if !ok || off+h.size > len(payload) {
+			// A frame that continues in the next PES, or junk; the last PES of the
+			// file may just be cut short.
+			a.unparsable = !endOfStream
+			break
+		}
+		if st.sampleRate == 0 {
+			st.sampleRate, st.timeScale = h.sampleRate, int64(h.sampleRate)
+		}
+		if h.sampleRate != st.sampleRate {
+			a.unparsable = true
+			break
+		}
+		end := a.headerSize + off + h.size
+		if h.sameTimeAsPrevious && len(st.frames) > pes.firstFrame {
+			st.frames[len(st.frames)-1].endOffset = end
+		} else {
+			d := int64(h.samples) * ticksPerSec
+			st.frames = append(st.frames, audioFrame{start: pes.pts*st.timeScale + elapsed, duration: d, endOffset: end})
+			elapsed += d
+		}
+		off += h.size
+	}
+	pes.frameCount = len(st.frames) - pes.firstFrame
+}
+
+// finalizeAudio cuts audio whose frames cannot be followed at PES boundaries
+// instead, with each PES lasting until the next one starts.
+func (s *scanner) finalizeAudio(slot int) {
+	st := &s.idx.audio[slot]
+	st.frameLevel = st.codec != audioUnknown && !s.audio[slot].unparsable && len(st.frames) > 0
+	if st.frameLevel {
+		return
+	}
+	if st.codec != audioUnknown {
+		s.idx.warnings = append(s.idx.warnings, fmt.Sprintf(
+			"audio PID %d: frames are not aligned to PES or change format; laps end on PES boundaries", st.pid))
+	}
+	st.timeScale = 1
+	st.frames = st.frames[:0]
+	for i := range st.pes {
+		p := &st.pes[i]
+		d := int64(0)
+		if i+1 < len(st.pes) {
+			d = st.pes[i+1].pts - p.pts
+		} else if len(st.frames) > 0 {
+			d = st.frames[len(st.frames)-1].duration
+		}
+		p.firstFrame, p.frameCount = i, 1
+		st.frames = append(st.frames, audioFrame{start: p.pts, duration: d,
+			endOffset: st.chunks[p.firstChunk+p.chunkCount-1].endOffset})
+	}
+}
+
+// maxFieldPairGap: the second field of a frame is shown one field period after
+// the first, at most 1/48 s, and never further apart than this.
+const maxFieldPairGap = ticksPerSec / 24
+
+// pairFields marks the second field of each frame coded as two field pictures:
+// a field that follows an unpaired field of the other parity in decode order,
+// as MPEG-2 and H.264 require and H.265 encoders do, and is shown just after it.
+// The fields of a frame share an H.264 frame_num and an MPEG-2
+// temporal_reference, and an H.264 IDR or an MPEG-2 field after a sequence
+// header is a first field: a field lost from the source leaves its partner
+// unpaired, not the pairing out of step.
+func (s *scanner) pairFields() {
+	pics := s.idx.pictures
+	codec := s.idx.videoCodec
+	pairs := func(first, second *videoPicture) bool {
+		a, b := &first.info, &second.info
+		if a.field == b.field || second.pts <= first.pts || second.pts-first.pts > maxFieldPairGap ||
+			a.temporalRef != b.temporalRef {
+			return false
+		}
+		switch codec {
+		case CODEC_AVC:
+			return b.accessPoint != apClosedGOP &&
+				(a.numbering == nil || b.numbering == nil || a.numbering.frameNum == b.numbering.frameNum)
+		case CODEC_MPEG2V:
+			return !b.parameterSets
+		}
+		return true
+	}
+	open := -1
+	for i := range pics {
+		switch {
+		case !pics[i].info.isField():
+			open = -1
+		case open >= 0 && pairs(&pics[open], &pics[i]):
+			pics[i].info.secondField = true
+			open = -1
+		default:
+			open = i
+		}
+	}
+}
+
+// promoteMPEG2ClosedGOPs makes an open-GOP MPEG-2 I picture that no B picture
+// follows a closed-GOP access point: it has no leading pictures. A lone field
+// is followed by its other field first.
+func (s *scanner) promoteMPEG2ClosedGOPs() {
+	if s.idx.videoCodec != CODEC_MPEG2V {
+		return
+	}
+	pics := s.idx.pictures
+	for i := range pics {
+		if pics[i].info.accessPoint != apOpenGOP {
+			continue
+		}
+		next := i + 1
+		if pics[i].info.isField() {
+			next++
+		}
+		if next < len(pics) && !pics[next].info.bPicture {
+			pics[i].info.accessPoint = apClosedGOP
+		}
+	}
+}
+
+func (s *scanner) finish() error {
+	idx := s.idx
+	idx.nullsBefore = append(idx.nullsBefore, s.nulls)
+	s.finishVideoPES()
+	for slot := range s.audio {
+		s.finishAudioPES(slot, true)
+		s.finalizeAudio(slot)
+	}
+	s.pairFields()
+	s.promoteMPEG2ClosedGOPs()
+	for pid, a := range s.scte35 {
+		idx.scte35Sections[pid] = a.sections
+	}
+
+	if s.invalid*1_000_000 > idx.packetCount*maxInvalidPerMillion {
+		return fmt.Errorf("%d of %d packets lack the 0x47 sync byte: not a 188-byte TS", s.invalid, idx.packetCount)
+	}
+	if s.invalid > 0 {
+		idx.warnings = append(idx.warnings,
+			fmt.Sprintf("%d packets lack the sync byte; they are replaced by null packets", s.invalid))
+	}
+	if s.corrupt > 0 {
+		idx.warnings = append(idx.warnings, fmt.Sprintf(
+			"%d packets have an adaptation field longer than the packet; they are replaced by null packets", s.corrupt))
+	}
+	// Video and audio are cut at their PES, so a PES starting inside a packet
+	// cannot be looped; other streams are copied whole and only break at the seam.
+	misplacedOn := func(looped bool) string {
+		var where []string
+		pids := make([]int, 0, len(s.misplacedStart))
+		for pid := range s.misplacedStart {
+			pids = append(pids, pid)
+		}
+		sort.Ints(pids)
+		for _, pid := range pids {
+			if (s.role[pid] != roleOther) != looped {
+				continue
+			}
+			m := s.misplacedStart[pid]
+			where = append(where, fmt.Sprintf("PID %d (%d, the first at packet %d)", pid, m.count, m.firstPacket))
+		}
+		return strings.Join(where, ", ")
+	}
+	if where := misplacedOn(true); where != "" {
+		return fmt.Errorf("payload units that do not start with a PES header on %s: the PES do not start at TS "+
+			"packets, so this content cannot be looped", where)
+	}
+	if where := misplacedOn(false); where != "" {
+		idx.warnings = append(idx.warnings, fmt.Sprintf(
+			"payload units that do not start with a PES header on %s: those streams break at the seam", where))
+	}
+	if len(idx.continuityErrors) > 0 {
+		perPID := make(map[int]int)
+		for _, e := range idx.continuityErrors {
+			perPID[e.pid]++
+		}
+		pids := make([]int, 0, len(perPID))
+		for pid := range perPID {
+			pids = append(pids, pid)
+		}
+		sort.Ints(pids)
+		var where []string
+		for _, pid := range pids {
+			where = append(where, fmt.Sprintf("PID %d: %d", pid, perPID[pid]))
+		}
+		idx.warnings = append(idx.warnings, fmt.Sprintf("the source has %d continuity errors (%s), the first at packet %d",
+			len(idx.continuityErrors), strings.Join(where, ", "), idx.continuityErrors[0].packet))
+	}
+	if idx.videoPID < 0 {
+		return fmt.Errorf("the program has no H.262, H.264 or H.265 video")
+	}
+	if len(idx.pictures) == 0 {
+		return fmt.Errorf("no video PES found")
+	}
+	if s.pesWithoutPTS > 0 {
+		return fmt.Errorf("%d video or audio PES carry no PTS; every one must", s.pesWithoutPTS)
+	}
+	if s.unreadablePES > 0 {
+		idx.warnings = append(idx.warnings, fmt.Sprintf(
+			"%d video or audio PES headers are scrambled or split across packets; those PES are ignored", s.unreadablePES))
 	}
 	return nil
 }
 
-// resolveMPEG2Leading settles a pending open-GOP I picture once the next coded
-// picture au is known. closed_gop=0 only matters if B-pictures follow the I
-// picture in coding order: they display before it and predict from the previous
-// GOP, which at a loop seam is the previous wrap's tail. If the next picture is
-// not a B-picture there are none, and the I picture is a clean loop point.
-func (s *scanTrack) resolveMPEG2Leading(au AUInfo) {
-	if !s.openPending || !au.IsVCL {
-		return
+// scanStream scans a TS once. It fails when the input is not 188-byte TS, has
+// no PMT or video, when a video or audio PES has no PTS, or when an elementary
+// stream's payload unit does not start with a PES header: its PES do not start
+// at TS packets.
+func scanStream(ctx context.Context, data []byte) (*streamIndex, error) {
+	if len(data) < PacketSize || data[0] != syncByte {
+		return nil, fmt.Errorf("the input does not start with a 188-byte TS packet")
 	}
-	if s.openSkipField {
-		s.openSkipField = false
-		return
+	if isBTS(data) {
+		return nil, fmt.Errorf("the input is an ISDB-T BTS (204-byte packets); only a 188-byte TS can be looped")
 	}
-	s.openPending = false
-	if au.PicType != mpeg2PicB {
-		p := &s.pics[s.openIdx]
-		p.IsIDR, p.IsCRA = true, false
-	}
-}
-
-// audioFrameDur returns the audio frame duration in 90 kHz ticks, preferring the
-// exact value from the framer and falling back to the PES-step estimate.
-func (s *scanTrack) audioFrameDur() int64 {
-	if s.framer != nil && s.framer.FrameDurTicks() > 0 {
-		return s.framer.FrameDurTicks()
-	}
-	return audioFrameDurEstimate(s)
-}
-
-// Stat is a min/max/average summary of a set of integer steps.
-type Stat struct {
-	Min int64 `json:"min"`
-	Max int64 `json:"max"`
-	Avg int64 `json:"avg"`
-}
-
-// VideoScan summarizes the video elementary stream and its loop points.
-type VideoScan struct {
-	PID               int    `json:"pid"`
-	Codec             string `json:"codec"`
-	Pictures          int    `json:"pictures"`
-	FrameRate         string `json:"frameRate"`
-	ConstantFrameRate bool   `json:"constantFrameRate"`
-	DTSStepTicks      Stat   `json:"dtsStepTicks"`
-	Field             string `json:"field"`
-	PESWithoutPTS     int    `json:"pesWithoutPTS,omitempty"`
-	LoopPointType     string `json:"loopPointType"` // IDR | CRA | RAP | I-closed | I-open | none
-	LoopPoints        int    `json:"loopPoints"`
-	GOPDurationTicks  Stat   `json:"gopDurationTicks"`
-	ConstantGOP       bool   `json:"constantGop"`
-	FirstPTS          int64  `json:"firstPTS"`
-	LastPTS           int64  `json:"lastPTS"`
-	DurationTicks     int64  `json:"durationTicks"`
-	MaxLoopTicks      int64  `json:"maxLoopTicks"`
-	MaxLoopGOPs       int64  `json:"maxLoopGops"`
-}
-
-// AudioScan summarizes one audio elementary stream.
-type AudioScan struct {
-	PID           int    `json:"pid"`
-	Codec         string `json:"codec"`
-	PESCount      int    `json:"pesCount"`
-	Frames        int    `json:"frames"`
-	SampleRate    int    `json:"sampleRate"`
-	FrameDurTicks int64  `json:"frameDurTicks"`
-	NonPESAligned bool   `json:"nonPESAligned"`
-	PESWithoutPTS int    `json:"pesWithoutPTS,omitempty"`
-	PESStepTicks  Stat   `json:"pesStepTicks"`
-	FirstPTS      int64  `json:"firstPTS"`
-	LastPTS       int64  `json:"lastPTS"`
-	DurationTicks int64  `json:"durationTicks"`
-}
-
-// ScanReport is the result of the scan pass, emitted by `mp2ts-loop -scan`.
-type ScanReport struct {
-	File         string              `json:"file"`
-	TotalPackets int                 `json:"totalPackets"`
-	Video        *VideoScan          `json:"video,omitempty"`
-	Audio        []*AudioScan        `json:"audio,omitempty"`
-	PassThrough  []PassThroughStream `json:"passThrough,omitempty"`
-	Loop         *LoopPlan           `json:"loop,omitempty"`
-	Note         string              `json:"note,omitempty"`
-}
-
-// runScan opens the file, identifies the streams, and runs the analysis pass,
-// returning the TSStream plus the per-track scan records (video + audio).
-func runScan(ctx context.Context, path string) (*TSStream, *scanTrack, []*scanTrack, error) {
-	fh, err := os.Open(path)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	defer func() { _ = fh.Close() }()
-
-	ts, err := InitTS(fh)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	tracks := make(map[int]*scanTrack)
-	for pid, es := range ts.ElStreams {
-		if es.MediaType != "video" && es.MediaType != "audio" {
-			continue
-		}
-		st := &scanTrack{pid: pid, codec: es.Codec, mediaType: es.MediaType}
-		es.SetPESHandler(st)
-		tracks[pid] = st
-	}
-	if err := ts.ProcessTSFile(ctx, fh); err != nil {
-		return nil, nil, nil, err
-	}
-	var vid *scanTrack
-	var auds []*scanTrack
-	for _, st := range tracks {
-		switch st.mediaType {
-		case "video":
-			vid = st
-		case "audio":
-			auds = append(auds, st)
-		}
-	}
-	sort.Slice(auds, func(i, j int) bool { return auds[i].pid < auds[j].pid })
-	return ts, vid, auds, nil
-}
-
-// loopBitrate returns the measured average bitrate and whether the stream is CBR.
-func loopBitrate(ts *TSStream) (int64, bool) {
-	if avg, _, _, constant, ok := ts.PCRBitrate(); ok {
-		return avg, constant
-	}
-	return 0, false
-}
-
-// Scan analyzes a TS file and returns a ScanReport. fpsNum/fpsDen are an optional
-// frame-rate hint (0 = auto-detect); durCapMS caps the loop length (0 = longest).
-func Scan(ctx context.Context, path string, fpsNum, fpsDen, durCapMS int) (*ScanReport, error) {
-	ts, vid, auds, err := runScan(ctx, path)
+	n := len(data) / PacketSize // whole packets only: a cut-short last packet is not looped
+	p, err := findProgram(data, n)
 	if err != nil {
 		return nil, err
 	}
-	rep := &ScanReport{File: path, TotalPackets: ts.TotalNrPackets()}
-	if vid != nil {
-		rep.Video = analyzeVideo(vid, fpsNum, fpsDen)
+	idx := &streamIndex{
+		packetCount:    n,
+		units:          make(map[int][]payloadUnit),
+		scte35Sections: make(map[int][]SCTE35Section),
+		nullsBefore:    make([]uint32, 0, n+1),
 	}
-	for _, a := range auds {
-		rep.Audio = append(rep.Audio, analyzeAudio(a))
-	}
-	rep.PassThrough = ts.PassThrough
-	if err := requirePTS(vid, auds); err != nil {
-		rep.Note = "cannot loop: " + err.Error()
-		return rep, nil
-	}
-	if err := ts.requireConstantRate(); err != nil {
-		rep.Note = "cannot loop: " + err.Error()
-		return rep, nil
-	}
-	bitrate, cbr := loopBitrate(ts)
-	rep.Loop = selectLoop(vid, auds, fpsNum, fpsDen, durCapMS, ts.PCRPid, bitrate, cbr, ts.discontinuities)
-	finishPlan(ts, rep.Loop)
-	return rep, nil
-}
-
-// requirePTS returns an error if any video or audio PES lacked a PTS. The loop
-// engine selects, trims, and shifts every PES by its PTS, so it does not loop
-// such streams.
-func requirePTS(vid *scanTrack, auds []*scanTrack) error {
-	for _, st := range append([]*scanTrack{vid}, auds...) {
-		if st != nil && st.noPTS > 0 {
-			return fmt.Errorf("%s PID %d has %d PES packets without a PTS; every audio and video PES must carry one",
-				st.mediaType, st.pid, st.noPTS)
+	s := newScanner(idx, p)
+	for i := 0; i < n; i++ {
+		if i&0xffff == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 		}
+		s.addPacket(i, data[i*PacketSize:(i+1)*PacketSize])
 	}
-	return nil
-}
-
-func analyzeVideo(st *scanTrack, fpsNum, fpsDen int) *VideoScan {
-	v := &VideoScan{PID: st.pid, Codec: st.codec.String(), Pictures: len(st.pics), Field: "frame",
-		PESWithoutPTS: st.noPTS}
-	if len(st.pics) == 0 {
-		return v
+	if err := s.finish(); err != nil {
+		return nil, err
 	}
-	dts := make([]int64, len(st.pics))
-	pts := make([]int64, len(st.pics))
-	for i, p := range st.pics {
-		dts[i] = p.DTS
-		pts[i] = p.PTS
-	}
-	v.DTSStepTicks = statOf(CalculateSteps(dts))
-	v.ConstantFrameRate = v.DTSStepTicks.Max-v.DTSStepTicks.Min <= 2
-	if fpsNum > 0 && fpsDen > 0 {
-		v.FrameRate = frLabel(fpsNum, fpsDen)
-	} else {
-		v.FrameRate = classifyFrameRateLabel(v.DTSStepTicks.Avg)
-	}
-
-	var eligible func(PicRecord) bool
-	v.LoopPointType, eligible = loopPointClass(st.codec, st.pics)
-	var loopPTS []int64
-	for _, p := range st.pics {
-		if eligible(p) {
-			loopPTS = append(loopPTS, p.PTS)
-		}
-	}
-	v.LoopPoints = len(loopPTS)
-	if len(loopPTS) >= 2 {
-		sort.Slice(loopPTS, func(i, j int) bool { return loopPTS[i] < loopPTS[j] })
-		v.GOPDurationTicks = statOf(CalculateSteps(loopPTS))
-		v.ConstantGOP = v.GOPDurationTicks.Max-v.GOPDurationTicks.Min <= 2
-		v.MaxLoopTicks = loopPTS[len(loopPTS)-1] - loopPTS[0]
-		if v.GOPDurationTicks.Avg > 0 {
-			v.MaxLoopGOPs = v.MaxLoopTicks / v.GOPDurationTicks.Avg
-		}
-	}
-
-	v.FirstPTS, v.LastPTS = minMax(pts)
-	v.DurationTicks = UnsignedPTSDiff(v.LastPTS, v.FirstPTS)
-	return v
-}
-
-func analyzeAudio(st *scanTrack) *AudioScan {
-	a := &AudioScan{
-		PID: st.pid, Codec: st.codec.String(), PESCount: len(st.audio),
-		Frames: st.frames, NonPESAligned: st.nonAligned, PESWithoutPTS: st.noPTS,
-	}
-	if st.framer != nil {
-		a.SampleRate = st.framer.SampleRate()
-		a.FrameDurTicks = st.framer.FrameDurTicks()
-	}
-	if len(st.audio) == 0 {
-		return a
-	}
-	pts := make([]int64, len(st.audio))
-	for i, p := range st.audio {
-		pts[i] = p.PTS
-	}
-	a.PESStepTicks = statOf(CalculateSteps(pts))
-	a.FirstPTS = pts[0]
-	a.LastPTS = pts[len(pts)-1]
-	a.DurationTicks = UnsignedPTSDiff(a.LastPTS, a.FirstPTS)
-	return a
-}
-
-func statOf(vals []int64) Stat {
-	if len(vals) == 0 {
-		return Stat{}
-	}
-	mn, mx, sum := vals[0], vals[0], int64(0)
-	for _, v := range vals {
-		if v < mn {
-			mn = v
-		}
-		if v > mx {
-			mx = v
-		}
-		sum += v
-	}
-	return Stat{Min: mn, Max: mx, Avg: sum / int64(len(vals))}
-}
-
-func minMax(vals []int64) (int64, int64) {
-	if len(vals) == 0 {
-		return 0, 0
-	}
-	mn, mx := vals[0], vals[0]
-	for _, v := range vals {
-		if v < mn {
-			mn = v
-		}
-		if v > mx {
-			mx = v
-		}
-	}
-	return mn, mx
-}
-
-// nominalFrameRates are the frame rates the scan recognizes: label, exact
-// rational rate num/den, and the DTS step (90 kHz ticks, rounded) they show as.
-var nominalFrameRates = []struct {
-	label    string
-	num, den int
-	step     int64
-}{
-	{"23.976", 24000, 1001, 3754}, {"24", 24, 1, 3750}, {"25", 25, 1, 3600},
-	{"29.97", 30000, 1001, 3003}, {"30", 30, 1, 3000}, {"50", 50, 1, 1800},
-	{"59.94", 60000, 1001, 1501}, {"60", 60, 1, 1500},
-}
-
-// nominalFrameRate returns the index in nominalFrameRates closest to a measured
-// average DTS step, or -1 if none is within 15 ticks.
-func nominalFrameRate(avgStep int64) int {
-	best, bestDiff := -1, int64(1)<<62
-	for i, f := range nominalFrameRates {
-		d := avgStep - f.step
-		if d < 0 {
-			d = -d
-		}
-		if d < bestDiff {
-			best, bestDiff = i, d
-		}
-	}
-	if bestDiff > 15 || avgStep == 0 {
-		return -1
-	}
-	return best
-}
-
-// classifyFrameRateLabel maps a measured average DTS step (90 kHz ticks) to a
-// frame-rate label, including the fractional NTSC-derived rates.
-func classifyFrameRateLabel(avgStep int64) string {
-	if i := nominalFrameRate(avgStep); i >= 0 {
-		return nominalFrameRates[i].label
-	}
-	if avgStep == 0 {
-		return "unknown"
-	}
-	return fmt.Sprintf("~%.3f", 90000.0/float64(avgStep))
-}
-
-func frLabel(num, den int) string {
-	if den == 1 {
-		return strconv.Itoa(num)
-	}
-	switch {
-	case num == 24000 && den == 1001:
-		return "23.976"
-	case num == 30000 && den == 1001:
-		return "29.97"
-	case num == 60000 && den == 1001:
-		return "59.94"
-	case num == 120000 && den == 1001:
-		return "119.88"
-	}
-	return fmt.Sprintf("%d/%d", num, den)
+	return idx, nil
 }

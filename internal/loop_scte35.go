@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"math"
 
 	"github.com/Comcast/gots/v2"
 	"github.com/Comcast/gots/v2/scte35"
@@ -364,9 +363,6 @@ func planSCTE35(pid int, all []SCTE35Section, start, end int, vs, loopDur int64)
 	return ls
 }
 
-// dropped reports whether the source packet pktNr carries a dropped section.
-func (ls *LoopSCTE35) dropped(pktNr int) bool { return ls != nil && ls.drop[pktNr] }
-
 // droppedEvents returns how many events are dropped.
 func (ls *LoopSCTE35) droppedEvents() int {
 	n := 0
@@ -463,6 +459,9 @@ func newSCTE35Patcher(data []byte, n, pid int, step uint32) *scte35Patcher {
 	return p
 }
 
+// sectionCount returns how many sections the patcher re-stamps each lap.
+func (p *scte35Patcher) sectionCount() int { return len(p.secs) }
+
 // packets returns the segment packets carrying SCTE-35 sections, rewritten for
 // the given wrap: pts_adjustment advanced by wrap*loopDur (mod 2^33), event IDs
 // by wrap*step (mod 2^32), and CRC_32 recomputed. Keys are packet indexes.
@@ -489,31 +488,6 @@ func (p *scte35Patcher) packets(data []byte, wrap int, loopDur int64) map[int][]
 		}
 	}
 	return out
-}
-
-// finishPlan adds what the plan needs from the whole stream: how far its PCR is
-// from a constant rate (near 0, since variable-rate streams are refused), and
-// which SCTE-35 cues of the chosen loop are kept.
-func finishPlan(ts *TSStream, plan *LoopPlan) {
-	if plan == nil || plan.NumGOPs < 1 {
-		return
-	}
-	if plan.PCR != nil {
-		plan.PCR.SourceDeviationMs = math.Round(ts.PCRDeviationMs()*10) / 10
-	}
-	planLoopSCTE35(ts, plan)
-}
-
-// planLoopSCTE35 adds to the plan which SCTE-35 cues of the chosen loop are kept.
-func planLoopSCTE35(ts *TSStream, plan *LoopPlan) {
-	if ts.SCTE35Pid < 0 {
-		return
-	}
-	start, end := plan.packetWindow()
-	plan.SCTE35 = planSCTE35(ts.SCTE35Pid, ts.scte35.sections, start, end, plan.StartPTS, plan.LoopDurTicks)
-	if plan.SCTE35.droppedEvents() > 0 {
-		plan.Warnings = append(plan.Warnings, scte35Warning(plan.SCTE35))
-	}
 }
 
 // scte35Warning summarizes dropped SCTE-35 events for the plan.
