@@ -2,7 +2,10 @@ package internal
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -679,5 +682,291 @@ func TestLoopSeparatePCRPID(t *testing.T) {
 	}
 	if count < laps*10 {
 		t.Errorf("only %d PCRs in %d laps", count, laps)
+	}
+}
+
+// picturesAndData returns the PTS of the output pictures in presentation order,
+// and the data PES in the order they are sent.
+func picturesAndData(out []byte) ([]int64, []*pesRecord) {
+	var pictures []int64
+	var data []*pesRecord
+	for _, r := range collectPES(out) {
+		switch r.pid {
+		case tVideoPID:
+			pictures = append(pictures, r.pts)
+		case tDataPID:
+			data = append(data, r)
+		}
+	}
+	slices.Sort(pictures)
+	return pictures, data
+}
+
+// dataSourcePTS reads the PTS a test data PES had in the source, from its payload.
+func dataSourcePTS(r *pesRecord) int64 { return int64(binary.BigEndian.Uint32(r.payload)) }
+
+func countPayloadPackets(stream []byte, pid, begin, end int) int {
+	n := 0
+	for i := begin; i < end; i++ {
+		if p := packetAt(stream, i); tsPID(p) == pid && tsHasPayload(p) {
+			n++
+		}
+	}
+	return n
+}
+
+// checkDataOfPictures checks that the data PES are those of the pictures in
+// withData, one each in presentation order, each with its source PTS advanced
+// by the laps before its own.
+func checkDataOfPictures(t *testing.T, data []*pesRecord, withData []int64, firstPTS, duration int64) {
+	t.Helper()
+	if len(data) != len(withData) {
+		t.Fatalf("%d data PES for %d pictures", len(data), len(withData))
+	}
+	for k, r := range data {
+		lap := (r.pts - firstPTS) / duration
+		if r.pts != withData[k] || dataSourcePTS(r)+lap*duration != r.pts {
+			t.Fatalf("data PES %d at %d from %d, for the picture at %d", k, r.pts, dataSourcePTS(r), withData[k])
+		}
+	}
+}
+
+// TestLoopDataByPTS checks that data PES multiplexed three frames before their
+// picture, as some encoders send ANC, or three after, play with the picture of
+// their PTS across every seam.
+func TestLoopDataByPTS(t *testing.T) {
+	for _, ahead := range []int{3, -3} {
+		t.Run(fmt.Sprintf("%d frames ahead", ahead), func(t *testing.T) {
+			source := buildStream(t, streamOptions{seconds: 6, data: true, dataFramesAhead: ahead})
+			const laps = 4
+			l, out, stats := loopData(t, source, LoopOptions{MaxDurationMS: 2000}, laps)
+			plan := l.chosen
+			if anyHas(l.Report.Warnings, "PID 259") {
+				t.Errorf("warnings %v", l.Report.Warnings)
+			}
+			if d := l.Report.Loop.Data; len(d) != 1 || !d[0].PlacedByLap || d[0].PES != plan.frames {
+				t.Errorf("data fits %+v", d)
+			}
+			if stats.MovedDataPackets == 0 {
+				t.Errorf("no data moved across seams: %+v", stats)
+			}
+			if n := continuityErrors(out); n != 0 {
+				t.Errorf("%d continuity errors", n)
+			}
+			// Every picture, the first one too, has its own data PES and no other,
+			// and no data PES comes for a picture after the last.
+			pictures, data := picturesAndData(out)
+			if len(pictures) != laps*plan.frames {
+				t.Fatalf("%d pictures", len(pictures))
+			}
+			checkDataOfPictures(t, data, pictures, pictures[0], plan.duration)
+		})
+	}
+}
+
+// TestLoopDataMissingAtLoopEnds checks that the data PES a file lacks at one
+// end of the loop are missing from every lap, with a warning: a file trimmed to
+// start at the loop lacks the data sent before its first picture, one trimmed
+// to end at it the data sent after its last. No other picture's PES stands in.
+func TestLoopDataMissingAtLoopEnds(t *testing.T) {
+	for _, ahead := range []int{3, -3} {
+		t.Run(fmt.Sprintf("%d frames ahead", ahead), func(t *testing.T) {
+			source := buildStream(t, streamOptions{seconds: 6, data: true, dataFramesAhead: ahead})
+			idx, err := scanData(t, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := chooseLoop(idx, loopOptions{maxDuration: 2 * ticksPerSec})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < len(source)/PacketSize; i++ {
+				outside := i >= plan.endPacket
+				if ahead > 0 {
+					outside = i < plan.startPacket
+				}
+				if p := packetAt(source, i); tsPID(p) == tDataPID && outside {
+					writeNullPacket(p)
+				}
+			}
+
+			const laps = 4
+			l, out, _ := loopData(t, source, LoopOptions{MaxDurationMS: 2000}, laps)
+			if l.chosen.startPacket != plan.startPacket || l.chosen.endPacket != plan.endPacket {
+				t.Fatalf("loop %+v, want packets %d..%d", l.Report.Loop, plan.startPacket, plan.endPacket)
+			}
+			const missing = 3
+			d := l.Report.Loop.Data
+			if len(d) != 1 || (ahead > 0 && d[0].MissingAtStart != missing) || (ahead < 0 && d[0].MissingAtEnd != missing) {
+				t.Errorf("data fits %+v", d)
+			}
+			if !anyHas(l.Report.Warnings, "data PID 259") {
+				t.Errorf("warnings %v", l.Report.Warnings)
+			}
+			if n := continuityErrors(out); n != 0 {
+				t.Errorf("%d continuity errors", n)
+			}
+			pictures, data := picturesAndData(out)
+			if len(pictures) != laps*plan.frames {
+				t.Fatalf("%d pictures", len(pictures))
+			}
+			var withData []int64
+			for i, pts := range pictures {
+				inLap := i % plan.frames
+				if (ahead > 0 && inLap >= missing) || (ahead < 0 && inLap < plan.frames-missing) {
+					withData = append(withData, pts)
+				}
+			}
+			checkDataOfPictures(t, data, withData, pictures[0], plan.duration)
+		})
+	}
+}
+
+// TestLoopDataWithoutPTS checks that a data stream whose PES carry no PTS stays
+// where the source sends it, with a warning.
+func TestLoopDataWithoutPTS(t *testing.T) {
+	source := buildStream(t, streamOptions{seconds: 6, data: true, dataFramesAhead: 3, dataWithoutPTS: true})
+	const laps = 2
+	l, out, _ := loopData(t, source, LoopOptions{MaxDurationMS: 2000}, laps)
+	if d := l.Report.Data; len(d) != 1 || d[0].Timing != "a PES without a PTS" || l.Report.Loop.Data[0].PlacedByLap {
+		t.Errorf("data %+v, fits %+v", d, l.Report.Loop.Data)
+	}
+	if !anyHas(l.Report.Warnings, "data PID 259") {
+		t.Errorf("warnings %v", l.Report.Warnings)
+	}
+	if n := continuityErrors(out); n != 0 {
+		t.Errorf("%d continuity errors", n)
+	}
+	window := countPayloadPackets(source, tDataPID, l.chosen.startPacket, l.chosen.endPacket)
+	if n := countPayloadPackets(out, tDataPID, 0, len(out)/PacketSize); window == 0 || n != laps*window {
+		t.Errorf("%d data packets in %d laps of %d", n, laps, window)
+	}
+}
+
+// TestLoopAudioHeadGap checks that audio a file lacks at the loop's start leaves
+// that gap in every lap, with a warning: audio sent 150 ms before its video, in
+// a file that holds none before the loop. No audio from after the loop's end
+// stands in for it. With an IDR every 50 frames in 4 s, this is the only loop,
+// so it is chosen despite its audio.
+func TestLoopAudioHeadGap(t *testing.T) {
+	source := buildStream(t, streamOptions{seconds: 4, audioMuxDelay: -13_500, gop: 50})
+	idx, err := scanData(t, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := chooseLoop(idx, loopOptions{maxDuration: 2 * ticksPerSec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < plan.startPacket; i++ {
+		if p := packetAt(source, i); tsPID(p) == tAudioPID || tsPID(p) == tAudio2PID {
+			writeNullPacket(p)
+		}
+	}
+
+	const laps = 4
+	l, out, stats := loopData(t, source, LoopOptions{MaxDurationMS: 2000}, laps)
+	if l.chosen.startPacket != plan.startPacket || l.chosen.endPacket != plan.endPacket {
+		t.Fatalf("loop %+v, want packets %d..%d", l.Report.Loop, plan.startPacket, plan.endPacket)
+	}
+	if !anyHas(l.Report.Warnings, "start the file earlier") {
+		t.Errorf("warnings %v", l.Report.Warnings)
+	}
+	if stats.AudioGaps != laps*len(l.seg.audio) {
+		t.Errorf("stats %+v", stats)
+	}
+	if n := continuityErrors(out); n != 0 {
+		t.Errorf("%d continuity errors", n)
+	}
+
+	loopStart, duration := idx.pictures[plan.startPicture].pts, plan.duration
+	audio := make(map[int][]*pesRecord)
+	for _, r := range collectPES(out) {
+		if r.pid == tAudioPID || r.pid == tAudio2PID {
+			audio[r.pid] = append(audio[r.pid], r)
+		}
+	}
+	if len(audio) != 2 {
+		t.Fatalf("%d audio streams", len(audio))
+	}
+	for pid, recs := range audio {
+		// Every frame plays its own time of the loop, up to a frame late, never
+		// audio from after the loop's end; so no lap has audio for the time the
+		// file lacks at the loop's start.
+		type frame struct{ out, src int64 }
+		var frames []frame
+		firstSource := int64(math.MaxInt64)
+		for _, r := range recs {
+			for k := 0; k+tAudioFrameSize <= len(r.payload); k += tAudioFrameSize {
+				f := frame{r.pts + int64(k/tAudioFrameSize)*tAudioFrameTicks, sourcePTS(r.payload[k:])}
+				frames = append(frames, f)
+				firstSource = min(firstSource, f.src)
+			}
+		}
+		missing := firstSource - loopStart
+		if missing <= tAudioFrameTicks/2 {
+			t.Errorf("audio PID %d: the file lacks only %d ticks", pid, missing)
+		}
+		for _, f := range frames {
+			shift := f.out - f.src
+			if f.src >= loopStart+duration || shift < 0 || shift%duration >= tAudioFrameTicks ||
+				(f.out-loopStart)%duration < missing {
+				t.Fatalf("audio PID %d: frame from %d plays at %d", pid, f.src, f.out)
+			}
+		}
+	}
+}
+
+// TestLoopLeadingPictures checks that every stream loops the PTS interval of the
+// loop's pictures, which starts before its IDR when pictures decoded after it
+// are shown first.
+func TestLoopLeadingPictures(t *testing.T) {
+	source := buildStream(t, streamOptions{seconds: 6, data: true, dataFramesAhead: 3, leadingPictures: true})
+	idx, err := scanData(t, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const laps = 4
+	l, out, _ := loopData(t, source, LoopOptions{MaxDurationMS: 2000}, laps)
+	plan := l.chosen
+	if plan.accessPoint != apClosedGOP {
+		t.Fatalf("loop %+v", l.Report.Loop)
+	}
+	firstPTS := int64(math.MaxInt64)
+	for _, p := range idx.pictures[plan.startPicture:plan.endPicture] {
+		firstPTS = min(firstPTS, p.pts)
+	}
+	if firstPTS != idx.pictures[plan.startPicture].pts-2*tFrameTicks || plan.firstPTS != firstPTS ||
+		l.Report.Loop.FirstPTS != firstPTS {
+		t.Fatalf("loop %+v, its pictures start at %d", l.Report.Loop, firstPTS)
+	}
+	if anyHas(l.Report.Warnings, "audio PID") || anyHas(l.Report.Warnings, "data PID") {
+		t.Errorf("warnings %v", l.Report.Warnings)
+	}
+	if n := continuityErrors(out); n != 0 {
+		t.Errorf("%d continuity errors", n)
+	}
+
+	// Every picture, the ones shown before the IDR too, has the data of its own
+	// source picture.
+	pictures, data := picturesAndData(out)
+	if len(pictures) != laps*plan.frames {
+		t.Fatalf("%d pictures", len(pictures))
+	}
+	checkDataOfPictures(t, data, pictures, pictures[0], plan.duration)
+
+	// Every audio frame comes from the same interval, up to a frame late.
+	for _, r := range collectPES(out) {
+		if r.pid != tAudioPID && r.pid != tAudio2PID {
+			continue
+		}
+		for k := 0; k+tAudioFrameSize <= len(r.payload); k += tAudioFrameSize {
+			src := sourcePTS(r.payload[k:])
+			shift := r.pts + int64(k/tAudioFrameSize)*tAudioFrameTicks - src
+			if src < firstPTS-tAudioFrameTicks/2 || src >= firstPTS+plan.duration || shift < 0 ||
+				shift%plan.duration >= tAudioFrameTicks {
+				t.Fatalf("audio PID %d: frame from %d shifted %d", r.pid, src, shift)
+			}
+		}
 	}
 }

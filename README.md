@@ -116,16 +116,25 @@ Each lap continues the continuity counters in the source's own pattern and advan
 and PES timestamps by the loop duration. A constant-rate stream gets an exactly linear PCR,
 with null packets added or removed just before the seam; a variable-rate stream keeps its
 source timing. Null packets at the seam carry extra PCRs so the PCR stays within 40 ms.
-Audio packets move across the seam, so each lap plays the audio of its video, up to a frame
-later and never earlier, without drift; the first and last audio PES of a lap are cut on
-frame boundaries (AAC ADTS, MPEG audio, AC-3, E-AC-3), and other audio (LATM, S302M, AC-4)
-on PES boundaries. An open-GOP or recovery-point loop point is marked as an edit (HEVC CRA
-becomes BLA, MPEG-2 gets `broken_link`, a recovery point SEI gets `broken_link_flag`).
+Every stream loops the same PTS interval as the video: the loop's duration from the earliest
+PTS of its pictures, which comes before the first access point's when pictures decoded after it
+are shown first. Audio packets move across the seam, so each lap plays the audio of its video,
+up to a frame later and never earlier, without drift; the first and last audio PES of a lap are
+cut on frame boundaries (AAC ADTS, MPEG audio, AC-3, E-AC-3), and other audio (LATM, S302M, AC-4)
+on PES boundaries. The PES of data streams, such as SMPTE ST 2038 ANC, teletext or subtitles,
+move across the seam whole with the picture their PTS is nearest, so each picture keeps its own
+ANC even when the encoder sends it frames ahead. A file that lacks a stream's audio or data at
+an end of the loop, as one trimmed to it, leaves that gap in every lap, with a warning, rather
+than playing what belongs to other pictures; trim a file from the first packet of any stream that
+belongs to the loop's first picture. An open-GOP or recovery-point loop point is marked as an
+edit (HEVC CRA becomes BLA, MPEG-2 gets `broken_link`, a recovery point SEI gets
+`broken_link_flag`).
 SCTE-35 cues are kept only when the whole break, from CUE-OUT to CUE-IN (or CUE-OUT plus
 its duration), lies inside the loop; a cue sent ahead of the loop for such a break is moved
 to the start. Every lap re-sends the kept cues with `pts_adjustment` advanced and new event
-IDs. Other PIDs, such as SMPTE-2038 ANC data or subtitles, keep their packets with their
-timestamps advanced.
+IDs. A data stream whose PES have no PTS, an unreadable header or a PTS that goes back, and
+other PIDs (sections, a second video), keep their packets where the source sends them, with
+their timestamps advanced, and so break at the seam.
 
 Interlaced video is read for how its pictures are shown: field pictures (MPEG-2 field
 pictures, H.264 PAFF, H.265 field coding) are paired into frames, and a loop never starts

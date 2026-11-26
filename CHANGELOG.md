@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the seam, whole frame periods, audio from the loop start, and a seam that needs no change of
   output rate, before length; it looks at the PCR stretch between discontinuities a loop lies in
 - mp2ts-loop paces UDP output by the output PCR, and sends the PAT and PMT once before the first lap
+- mp2ts-loop moves the PES of data streams, such as SMPTE ST 2038 ANC, teletext and subtitles,
+  across the seam with the picture of their PTS, as it does audio, so each lap's pictures keep
+  their own ANC; a data stream whose PES have no PTS stays where the source sends it, with a
+  warning
+- mp2ts-loop loops audio and data over the PTS interval of the loop's pictures, from the earliest,
+  and a file that lacks a stream's audio or data at an end of the loop leaves that gap in every
+  lap, with a warning, instead of filling it from other pictures
 - mp2ts-loop `-m` defaults to one lap for file output, `-d` bounds the loop search, and the `-scan`
   report has a new format with the access points, the chosen loop, the lap, continuity errors and
   warnings; a stream that cannot be looped is reported with an error and exit status 1

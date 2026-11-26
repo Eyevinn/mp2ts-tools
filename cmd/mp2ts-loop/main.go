@@ -29,7 +29,8 @@ whole number of frames, audio from its start, and then the longest. Each lap is
 the source packets of that window: continuity counters, PCR and PES timestamps
 are advanced by the loop duration, and partial PES at the window's edges are
 removed. Audio moves across the seam so each lap plays the audio of its video,
-up to a frame later and never earlier, without drift. A constant-rate stream
+up to a frame later and never earlier, without drift. Data PES, such as SMPTE
+ST 2038 ANC, move with the picture of their PTS. A constant-rate stream
 gets null packets added or removed just before the seam and an exactly linear
 PCR; a variable-rate stream keeps its source timing. An open-GOP or recovery
 point loop point is marked as an edit (HEVC CRA becomes BLA, MPEG-2 gets
@@ -160,8 +161,8 @@ func printSummary(rep *internal.ScanReport) {
 	if v.PulldownPictures > 0 {
 		structure += fmt.Sprintf(", %d repeating fields or frames", v.PulldownPictures)
 	}
-	fmt.Fprintf(os.Stderr, "video PID %d %s, %d pictures%s; %d audio stream(s)\n", v.PID, v.Codec, v.Pictures,
-		structure, len(rep.Audio))
+	fmt.Fprintf(os.Stderr, "video PID %d %s, %d pictures%s; %d audio stream(s), %d data stream(s)\n", v.PID, v.Codec,
+		v.Pictures, structure, len(rep.Audio), len(rep.Data))
 	frames := strconv.FormatFloat(lp.Frames, 'f', -1, 64) + " frames"
 	if lp.Frames != float64(lp.Pictures) {
 		frames += fmt.Sprintf(" in %d pictures", lp.Pictures)
@@ -186,6 +187,13 @@ func printSummary(rep *internal.ScanReport) {
 		}
 		fmt.Fprintf(os.Stderr, "audio PID %d %s: %d %ss from %+.1f ms of the loop start, %+.1f ms beyond the loop\n",
 			a.PID, rep.Audio[i].Codec, a.Units, unit, a.SeamOffsetMS, a.ExcessMS)
+	}
+	for _, d := range lp.Data {
+		if d.PlacedByLap {
+			fmt.Fprintf(os.Stderr, "data PID %d: %d PES with the pictures of their PTS\n", d.PID, d.PES)
+		} else {
+			fmt.Fprintf(os.Stderr, "data PID %d: where the source sends it\n", d.PID)
+		}
 	}
 	for _, w := range rep.Warnings {
 		fmt.Fprintln(os.Stderr, "warning:", w)
@@ -278,8 +286,9 @@ func run(ctx context.Context, opts Options) error {
 	}
 	if runErr == nil && !opts.Quiet {
 		fmt.Fprintf(os.Stderr, "%d audio packets moved across seams (%d needed an extra packet), %d audio gaps, "+
-			"%d SCTE-35 sections advanced\n", stats.MovedAudioPackets, stats.InsertedAudioPackets, stats.AudioGaps,
-			stats.SCTE35Patched)
+			"%d data packets moved across seams (%d needed an extra packet), %d SCTE-35 sections advanced\n",
+			stats.MovedAudioPackets, stats.InsertedAudioPackets, stats.AudioGaps, stats.MovedDataPackets,
+			stats.InsertedDataPackets, stats.SCTE35Patched)
 	}
 	return runErr
 }

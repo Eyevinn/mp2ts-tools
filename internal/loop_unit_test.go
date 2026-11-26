@@ -363,7 +363,7 @@ func TestAudioLapController(t *testing.T) {
 	for f := int64(0); f <= 47; f++ {
 		starts = append(starts, f*tAudioFrameTicks)
 	}
-	c := audioLapController{frameStarts: starts, lapDuration: 90_000}
+	c := audioLapController{frameStarts: starts, lapSpan: 90_000}
 	end, frames := int64(0), int64(0)
 	for lap := int64(0); lap < 1000; lap++ {
 		r := c.next()
@@ -386,7 +386,7 @@ func TestAudioLapController(t *testing.T) {
 		}
 		starts = append(starts, starts[len(starts)-1]+step)
 	}
-	c = audioLapController{frameStarts: starts, lapDuration: 30 * 3003}
+	c = audioLapController{frameStarts: starts, lapSpan: 30 * 3003}
 	end = 0
 	for lap := int64(0); lap < 500; lap++ {
 		r := c.next()
@@ -397,7 +397,7 @@ func TestAudioLapController(t *testing.T) {
 	}
 
 	// Too little audio leaves a gap instead of drifting.
-	c = audioLapController{frameStarts: []int64{0, 1920, 3840}, lapDuration: 6000}
+	c = audioLapController{frameStarts: []int64{0, 1920, 3840}, lapSpan: 6000}
 	for lap := 0; lap < 10; lap++ {
 		if r := c.next(); !r.gap || r.offset != 0 || r.keptFrames != 2 {
 			t.Fatalf("lap %d: %+v", lap, r)
@@ -1080,7 +1080,7 @@ func TestPMTDescriptors(t *testing.T) {
 			t.Errorf("PID %#x: %v %v, want %v %v", es.pid, c, ok, want[i].codec, want[i].audio)
 		}
 	}
-	if l := passThroughLabel(streams[4]); l != "teletext" {
+	if l := streamLabel(streams[4]); l != "teletext" {
 		t.Errorf("label %q", l)
 	}
 	// A PMT whose stream loop runs past the section is refused.

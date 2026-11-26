@@ -23,12 +23,14 @@
       "cutAt": "frame"
     }
   ],
+  "data": [],
   "continuityErrors": {},
   "loop": {
     "accessPoint": "closed-gop",
     "startPacket": 3,
     "endPacket": 665,
     "startPts": 133200,
+    "firstPts": 133200,
     "endPts": 313200,
     "durationTicks": 180000,
     "durationMs": 2000,
@@ -48,9 +50,11 @@
         "pes": 7,
         "units": 95,
         "excessMs": 26.667,
+        "headGapMs": 0,
         "seamOffsetMs": 0
       }
-    ]
+    ],
+    "data": []
   },
   "lap": {
     "packets": 665,

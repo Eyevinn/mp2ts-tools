@@ -46,21 +46,52 @@ type AudioReport struct {
 	CutAt      string `json:"cutAt"` // frame or pes
 }
 
+// DataReport describes a data PES stream of the looped program, such as SMPTE
+// ST 2038 ANC, teletext or subtitles.
+type DataReport struct {
+	PID        int    `json:"pid"`
+	StreamType uint8  `json:"streamType"`
+	Label      string `json:"label"`
+	PES        int    `json:"pes"`
+	// Timing is "by PTS" when each lap can take its PES by their PTS, or what
+	// keeps it where the source sends it.
+	Timing string `json:"timing"`
+}
+
 // LoopAudioReport describes the audio a lap plays of one stream.
 type LoopAudioReport struct {
-	PID          int     `json:"pid"`
-	PES          int     `json:"pes"`
-	Units        int     `json:"units"`    // frames, or PES when cut at PES
-	ExcessMS     float64 `json:"excessMs"` // beyond the loop; negative: a gap at every seam
+	PID      int     `json:"pid"`
+	PES      int     `json:"pes"`
+	Units    int     `json:"units"`    // frames, or PES when cut at PES
+	ExcessMS float64 `json:"excessMs"` // beyond the loop's end; negative: a gap at the end of every lap
+	// HeadGapMS is how much of the loop's start the file holds no audio for: a
+	// gap at the start of every lap.
+	HeadGapMS    float64 `json:"headGapMs"`
 	SeamOffsetMS float64 `json:"seamOffsetMs"`
+}
+
+// LoopDataReport describes the data PES a lap plays of one stream.
+type LoopDataReport struct {
+	PID int `json:"pid"`
+	// PlacedByLap: each lap takes the PES of its own pictures; false: they stay
+	// where the source sends them.
+	PlacedByLap bool `json:"placedByLap"`
+	PES         int  `json:"pes"`
+	// MissingAtStart and MissingAtEnd are PES of the loop's first and last
+	// pictures that the file lacks.
+	MissingAtStart int `json:"missingAtStart"`
+	MissingAtEnd   int `json:"missingAtEnd"`
 }
 
 // LoopReport describes the chosen loop.
 type LoopReport struct {
-	AccessPoint   string  `json:"accessPoint"`
-	StartPacket   int     `json:"startPacket"`
-	EndPacket     int     `json:"endPacket"`
-	StartPTS      int64   `json:"startPts"`
+	AccessPoint string `json:"accessPoint"`
+	StartPacket int    `json:"startPacket"`
+	EndPacket   int    `json:"endPacket"`
+	StartPTS    int64  `json:"startPts"`
+	// FirstPTS is the earliest PTS of the loop's pictures, where the interval
+	// that every stream loops starts.
+	FirstPTS      int64   `json:"firstPts"`
 	EndPTS        int64   `json:"endPts"`
 	DurationTicks int64   `json:"durationTicks"`
 	DurationMS    float64 `json:"durationMs"`
@@ -77,6 +108,7 @@ type LoopReport struct {
 	WindowMS        float64           `json:"windowMs"`
 	PacketsPerLap   int               `json:"packetsPerLap"`
 	Audio           []LoopAudioReport `json:"audio"`
+	Data            []LoopDataReport  `json:"data"`
 	SCTE35          []*LoopSCTE35     `json:"scte35,omitempty"`
 }
 
@@ -102,6 +134,7 @@ type ScanReport struct {
 	PCRPID           int                 `json:"pcrPid"`
 	Video            *VideoReport        `json:"video,omitempty"`
 	Audio            []AudioReport       `json:"audio"`
+	Data             []DataReport        `json:"data"`
 	PassThrough      []PassThroughStream `json:"passThrough,omitempty"`
 	SCTE35PIDs       []int               `json:"scte35Pids,omitempty"`
 	ContinuityErrors map[int]int         `json:"continuityErrors"`
@@ -134,6 +167,7 @@ func describeIndex(input string, idx *streamIndex) *ScanReport {
 		PMTPID:           idx.pmtPID,
 		PCRPID:           idx.pcrPID,
 		Audio:            []AudioReport{},
+		Data:             []DataReport{},
 		PassThrough:      idx.passThrough,
 		SCTE35PIDs:       idx.scte35PIDs,
 		ContinuityErrors: make(map[int]int),
@@ -181,6 +215,10 @@ func describeIndex(input string, idx *streamIndex) *ScanReport {
 		}
 		rep.Audio = append(rep.Audio, ar)
 	}
+	for _, d := range idx.data {
+		rep.Data = append(rep.Data, DataReport{PID: d.pid, StreamType: d.streamType, Label: d.label, PES: len(d.pes),
+			Timing: d.timing.String()})
+	}
 	for _, e := range idx.continuityErrors {
 		rep.ContinuityErrors[e.pid]++
 	}
@@ -193,6 +231,7 @@ func describeLoop(rep *ScanReport, idx *streamIndex, plan *loopPlan, seg *loopSe
 		StartPacket:     plan.startPacket,
 		EndPacket:       plan.endPacket,
 		StartPTS:        int64(wrapAdd(0, idx.pictures[plan.startPicture].pts, ptsWrapU)),
+		FirstPTS:        int64(wrapAdd(0, plan.firstPTS, ptsWrapU)),
 		EndPTS:          int64(wrapAdd(0, idx.pictures[plan.endPicture].pts, ptsWrapU)),
 		DurationTicks:   plan.duration,
 		DurationMS:      round3(float64(plan.duration) / 90),
@@ -207,13 +246,19 @@ func describeLoop(rep *ScanReport, idx *streamIndex, plan *loopPlan, seg *loopSe
 		WindowMS:        round3(float64(plan.windowTime) / 27_000),
 		PacketsPerLap:   plan.outputPackets,
 		Audio:           []LoopAudioReport{},
+		Data:            []LoopDataReport{},
 		SCTE35:          plan.scte35,
 	}
 	for _, f := range plan.audio {
 		a := idx.audio[f.stream]
 		lr.Audio = append(lr.Audio, LoopAudioReport{PID: a.pid, PES: f.pesCount, Units: f.frameCount,
 			ExcessMS:     round3(float64(f.excess) / float64(a.timeScale) / 90),
+			HeadGapMS:    round3(float64(f.headGap) / float64(a.timeScale) / 90),
 			SeamOffsetMS: round3(float64(f.seamOffset) / 90)})
+	}
+	for _, f := range plan.data {
+		lr.Data = append(lr.Data, LoopDataReport{PID: idx.data[f.stream].pid, PlacedByLap: f.placedByLap(),
+			PES: len(f.members), MissingAtStart: f.missingAtStart, MissingAtEnd: f.missingAtEnd})
 	}
 	rep.Loop = lr
 	rep.Warnings = append(rep.Warnings, plan.warnings...)
@@ -321,9 +366,10 @@ func (o WriterOutput) Write(_ context.Context, packets []byte, _ func(int) int64
 
 func (o WriterOutput) Flush() error { return nil }
 
-// WriteLaps writes the preamble (PAT and PMT, then audio the first lap's video
-// is sent with), laps laps (0: until ctx ends), and for a bounded run the audio
-// of the last lap that the next lap would carry, to every output in turn.
+// WriteLaps writes the preamble (PAT and PMT, then audio and data the first
+// lap's video is sent with), laps laps (0: until ctx ends), and for a bounded
+// run the audio and data of the last lap that the next lap would carry, to every
+// output in turn.
 func (l *Loop) WriteLaps(ctx context.Context, outputs []LapOutput, laps int) (LapStatistics, error) {
 	if l.seg == nil {
 		return LapStatistics{}, errors.New("no loop to write")

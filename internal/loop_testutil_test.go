@@ -20,6 +20,7 @@ const (
 	tVideoPID          = 0x100
 	tAudioPID          = 0x101
 	tAudio2PID         = 0x102
+	tDataPID           = 0x103
 	tSCTE35PID         = 0x1f0
 	tPMTPID            = 0x1000
 	tFrameTicks        = 3600 // 25 fps
@@ -29,6 +30,7 @@ const (
 	tBitrate           = 1_500_000
 	tStartPTS          = 900_000
 	tSourcePTSOffset   = 7 // in each ADTS frame, after its header
+	tDataPayloadSize   = 16
 	tMuxDelay          = 400 * 27_000
 )
 
@@ -51,6 +53,17 @@ type streamOptions struct {
 	// headers that parse. bottomFirst sends the bottom field first.
 	fields      bool
 	bottomFirst bool
+	// data: a private PES stream, as SMPTE ST 2038 ANC, with a PES for each
+	// picture that carries that picture's PTS in its header and its first four
+	// payload bytes, multiplexed dataFramesAhead frames before the picture;
+	// negative is after. dataWithoutPTS leaves the PTS out of the header.
+	data            bool
+	dataFramesAhead int
+	dataWithoutPTS  bool
+	// leadingPictures: each IDR is shown after the two pictures decoded after it,
+	// as B pictures that predict only from it, so a loop's pictures start before
+	// its IDR.
+	leadingPictures bool
 }
 
 func adtsHeader(frameLength int) []byte {
@@ -231,6 +244,19 @@ func pesPackets(pid int, streamID byte, pts, dts int64, payload []byte) [][]byte
 	return tsPackets(pid, append(hdr, payload...))
 }
 
+// dataPESPackets carries a private_stream_1 PES of the test's data stream,
+// with a PTS unless pts < 0.
+func dataPESPackets(pts int64, payload []byte) [][]byte {
+	hdr := []byte{0, 0, 1, 0xbd, 0, 0, 0x80, 0, 0}
+	if pts >= 0 {
+		hdr[7], hdr[8] = 0x80, 5
+		hdr = append(hdr, 0x20, 0, 0, 0, 0)
+		writeTimestamp(hdr[9:], uint64(pts))
+	}
+	binary.BigEndian.PutUint16(hdr[4:], uint16(len(hdr)-6+len(payload)))
+	return tsPackets(tDataPID, append(hdr, payload...))
+}
+
 // tsPackets carries a payload unit in TS packets of pid.
 func tsPackets(pid int, unit []byte) [][]byte {
 	var pkts [][]byte
@@ -333,6 +359,9 @@ func buildStream(t *testing.T, o streamOptions) []byte {
 	for _, es := range [][2]int{{int(videoType), tVideoPID}, {stADTS, tAudioPID}, {int(o.audio2StreamType), tAudio2PID}} {
 		pmt = append(pmt, byte(es[0]), 0xe0|byte(es[1]>>8), byte(es[1]), 0xf0, 0)
 	}
+	if o.data {
+		pmt = append(pmt, stPrivateData, 0xe0|tDataPID>>8, tDataPID&0xff, 0xf0, 0)
+	}
 	if o.scte35 {
 		pmt = append(pmt, stSCTE35, 0xe0|tSCTE35PID>>8, tSCTE35PID&0xff, 0xf0, 0)
 	}
@@ -343,6 +372,17 @@ func buildStream(t *testing.T, o streamOptions) []byte {
 
 	frameTick := func(f int64) int64 { return (2*f*ticksPerSec*o.rate.Den + o.rate.Num) / (2 * o.rate.Num) }
 	frames := int64(o.seconds) * o.rate.Num / o.rate.Den
+	// shownIn is the frame period a picture is shown in, two after it is decoded.
+	shownIn := func(f int64) int64 {
+		inGOP := (f + int64(o.gop) - 5) % int64(o.gop)
+		switch {
+		case !o.leadingPictures || inGOP > 2:
+			return f + 2
+		case inGOP == 0:
+			return f + 4
+		}
+		return f + 1
+	}
 	type track struct {
 		pid           int
 		framesPerPES  int
@@ -360,7 +400,7 @@ func buildStream(t *testing.T, o streamOptions) []byte {
 		if idr {
 			size = 12000
 		}
-		pts := tStartPTS + frameTick(f+2)
+		pts := tStartPTS + frameTick(shownIn(f))
 		switch {
 		case o.fields:
 			// Frame numbers count from the IDR; picture order counts are 2 a frame.
@@ -376,6 +416,15 @@ func buildStream(t *testing.T, o streamOptions) []byte {
 			m.queue = append(m.queue, pesPackets(tVideoPID, 0xe0, pts, tStartPTS+tick, h265AccessUnit(idr, size))...)
 		default:
 			m.queue = append(m.queue, pesPackets(tVideoPID, 0xe0, pts, tStartPTS+tick, h264AccessUnit(idr, size))...)
+		}
+		if picture := f + int64(o.dataFramesAhead); o.data && picture >= 0 {
+			dataPTS := tStartPTS + frameTick(picture+2)
+			payload := bytes.Repeat([]byte{0xaa}, tDataPayloadSize)
+			binary.BigEndian.PutUint32(payload, uint32(dataPTS))
+			if o.dataWithoutPTS {
+				dataPTS = -1
+			}
+			m.queue = append(m.queue, dataPESPackets(dataPTS, payload)...)
 		}
 		if o.scte35 && idr {
 			cue := uint32(f / int64(o.gop))
@@ -556,18 +605,22 @@ type pesRecord struct {
 	payload  []byte // after the PES header
 }
 
-// collectPES returns the PES of the test stream's video and audio, in order.
+// collectPES returns the PES of the test stream's video, audio and data, in
+// order; pts is -1 when a PES has none.
 func collectPES(stream []byte) []*pesRecord {
 	var recs []*pesRecord
 	open := make(map[int]*pesRecord)
 	for i := 0; i < len(stream)/PacketSize; i++ {
 		p := packetAt(stream, i)
 		pid := tsPID(p)
-		if (pid != tVideoPID && pid != tAudioPID && pid != tAudio2PID) || !tsHasPayload(p) {
+		if (pid != tVideoPID && pid != tAudioPID && pid != tAudio2PID && pid != tDataPID) || !tsHasPayload(p) {
 			continue
 		}
 		if h, ok := findPESHeader(p); ok {
-			r := &pesRecord{pid: pid, packet: i, pts: int64(readTimestamp(p[h.pts:]))}
+			r := &pesRecord{pid: pid, packet: i, pts: -1}
+			if h.pts >= 0 {
+				r.pts = int64(readTimestamp(p[h.pts:]))
+			}
 			r.dts = r.pts
 			if h.dts >= 0 {
 				r.dts = int64(readTimestamp(p[h.dts:]))

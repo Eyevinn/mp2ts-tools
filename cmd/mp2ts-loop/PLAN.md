@@ -14,6 +14,10 @@ later one, and only the fields that have to change are patched.
   inputs: the bundled fixtures, 13 ffmpeg encodes across codecs, rates and GOP structures, and
   edge cases (PTS wrap, two programs, a lost packet, corrupt packets).
 - 2026-11-19: interlace (below): field pictures, field order and pulldown.
+- 2026-11-26: every stream loops the video's PTS interval, from the earliest PTS of the loop's
+  pictures; data PES (SMPTE ST 2038 ANC, teletext, subtitles) move across the seam with the
+  picture of their PTS, as audio does. An encoder that sends ANC three frames ahead of its
+  picture otherwise gave each lap's first pictures the ANC of pictures after the loop's end.
 
 ## Pipeline
 
@@ -21,9 +25,12 @@ later one, and only the fields that have to change are patched.
 
 1. **Scan** (`loop_scan.go`): one pass over the packets. The first program of the PAT and its PMT
    (a descriptor that does not parse is skipped, not the PMT), the video (first H.262/H.264/H.265
-   PID), audio (MPEG audio, ADTS, AC-3/E-AC-3 cut on frames; LATM, S302M, AC-4 on PES), SCTE-35
-   and pass-through PIDs. Per picture: PTS/DTS (unwrapped), access point class, parameter sets,
-   picture numbering and how it is shown (`loop_es.go`, see Interlace). Per audio PES: its frames and where its bytes lie. Also PCR
+   PID), audio (MPEG audio, ADTS, AC-3/E-AC-3 cut on frames; LATM, S302M, AC-4 on PES), data
+   (any other PES stream), SCTE-35 and pass-through PIDs (sections, a second video). Per picture:
+   PTS/DTS (unwrapped), access point class, parameter sets, picture numbering and how it is shown
+   (`loop_es.go`, see Interlace). Per audio PES: its frames and where its bytes lie. Per data PES:
+   its PTS and where its bytes lie, unless a PES of the stream has no PTS, a header that cannot be
+   read or a PTS earlier than the one before, which keeps the stream where it is sent. Also PCR
    samples, discontinuities, null packet counts, payload units per PID, continuity errors (a
    duplicate packet is allowed), and PES that do not start a packet's payload (refused on video
    and audio, warned on others). A BTS (204-byte packets) is refused.
@@ -36,24 +43,33 @@ later one, and only the fields that have to change are patched.
    both ends, whole frame periods, audio from the loop start, a seam needing no rate change,
    longest. A pair is skipped when its window crosses a discontinuity, is sent far off the
    time it lasts, shows a picture after its end, or would jump the DTS by more than 1 s. At most
-   16 million pairs are looked at.
+   16 million pairs are looked at. Every stream loops the PTS interval of the loop's duration
+   from the earliest PTS of the window's pictures (before the access point's when leading
+   pictures are shown first): audio from the frame nearest its start to its end, and data PES
+   whose PTS lie from half a frame before it to half a frame before the next lap's. Audio the file
+   lacks at the loop's start (more than half a frame) is a gap at the start of every lap, not made
+   up with audio from after the loop's end; data PES of the loop's first or last pictures that the
+   file lacks are counted and warned about. A data stream whose window PES are timed more than a
+   loop from the video, or whose loop PES are sent more than a loop away, stays where it is sent.
 3. **Build a lap** (`loop_segment.go`): the window's packets with corrupt ones nulled,
    discontinuity flags cleared, PES and sections cut by the edges stripped (a PCR stays as an
-   adaptation field), audio packets taken out (their PCR kept), and for constant-rate input null
+   adaptation field), audio and placed data packets taken out (their PCR kept), and for constant-rate input null
    packets removed or added at the end so a lap lasts exactly its duration. Send times are even for
    constant rate and the source's for variable rate. Null packets around the seam become PCR-only
    packets when the PCR would be more than 40 ms apart. The first picture is marked as an edit:
    CRA → BLA_W_LP, MPEG-2 `broken_link`, recovery point SEI `broken_link_flag`; so is its second
    field when that is an access point too (two CRA fields). The audio a lap
    plays is prepared per PES, each packet due where the source sends it relative to the window;
-   the PES holding the first frame loses the frames before it.
+   the PES holding the first frame loses the frames before it. Each data PES of the loop is
+   prepared whole the same way.
 4. **Write laps** (`loop_lap.go`): per lap, the audio controller picks how many frames end the lap
    so the next one continues without a timestamp jump (never earlier than the video, less than a
-   frame later, no drift). Audio sent after the window goes out at the start of the next lap,
-   audio sent before it at the end of the previous one, into free packets, or inserted (a
-   constant-rate lap then drops a free null packet). Continuity counters keep the source pattern
-   with one offset per PID and lap (audio is counted afresh); PCR, OPCR and PES timestamps advance
-   by the loop duration. A bounded run ends with the audio the next lap would have carried.
+   frame later, no drift; a lap with a gap at its start ends at the loop's end all the same).
+   Audio and data sent after the window go out at the start of the next lap, those sent before it
+   at the end of the previous one, into free packets, or inserted (a constant-rate lap then drops
+   a free null packet). Continuity counters keep the source pattern with one offset per PID and
+   lap (audio and placed data are counted afresh); PCR, OPCR and PES timestamps advance by the loop
+   duration. A bounded run ends with the audio and data the next lap would have carried.
 5. **Outputs** (`loop_send.go`): a writer (file or stdout) as fast as it goes, and UDP, 7 packets
    per datagram, each sent when its last packet is due by the output PCR on the monotonic clock.
 
@@ -121,6 +137,8 @@ Open:
 ## Known limits
 
 - Only the first program is looped; others are cut at its loop points and break at every seam.
+- A second video stream in the program is not moved by PTS: it stays where the source sends it
+  and breaks at every seam.
 - A recovery point SEI is read with the rest of its SEI NAL unit; a message there that does not
   parse hides it. `broken_link_flag` is not set when an emulation prevention byte comes before it.
 - Memory: the input is mapped, and a lap is built in memory from a copy of the loop's window, plus

@@ -24,12 +24,14 @@
       "cutAt": "frame"
     }
   ],
+  "data": [],
   "continuityErrors": {},
   "loop": {
     "accessPoint": "open-gop",
     "startPacket": 252,
     "endPacket": 626,
     "startPts": 172800,
+    "firstPts": 165600,
     "endPts": 302400,
     "durationTicks": 129600,
     "durationMs": 1440,
@@ -49,9 +51,11 @@
         "pes": 5,
         "units": 61,
         "excessMs": 24,
-        "seamOffsetMs": -10.022
+        "headGapMs": 0,
+        "seamOffsetMs": -2.022
       }
-    ]
+    ],
+    "data": []
   },
   "lap": {
     "packets": 479,

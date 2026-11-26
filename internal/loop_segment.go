@@ -9,20 +9,21 @@ import (
 const (
 	// maxPCRSpacing is DVB's limit between PCRs (ETSI TR 101 290, 5.2.2), and
 	// pcrFillSpacing the spacing of the PCRs that fill a gap, short of it so
-	// that audio packets the writer inserts between them do not push them past it.
+	// that audio and data packets the writer inserts between them do not push
+	// them past it.
 	maxPCRSpacing  = 40 * 27_000
 	pcrFillSpacing = 35 * 27_000
 	pesLengthAt    = 4 // PES_packet_length, from the PES start code
 	pesFixedHeader = 6 // start code, stream_id, PES_packet_length
 )
 
-// segmentPES is an audio PES of the loop, ready to place in a lap.
+// segmentPES is an audio or data PES of the loop, ready to place in a lap.
 type segmentPES struct {
 	packets    []byte // its packets with payload, without PCR
 	targets    []int  // per packet: the lap packet it is due at
-	packetEnds []int  // PES byte just past each packet's payload
-	frameEnds  []int  // PES byte just past each of its loop frames
-	firstFrame int    // into segmentAudio.frameStarts
+	packetEnds []int  // audio: PES byte just past each packet's payload
+	frameEnds  []int  // audio: PES byte just past each of its loop frames
+	firstFrame int    // audio: into segmentAudio.frameStarts
 	// lapShift is the lap it is sent in, relative to the lap whose audio it is:
 	// +1 when the source sends it after the window, -1 before.
 	lapShift int
@@ -31,21 +32,33 @@ type segmentPES struct {
 func (p *segmentPES) packetCount() int { return len(p.packets) / PacketSize }
 
 // segmentAudio is the audio a lap plays: the frames from the one nearest the
-// loop's first picture on, so the audio seam is where the video's is.
+// loop's first picture to the loop's end, so the audio seam is where the video's
+// is.
 type segmentAudio struct {
 	pid       int
 	timeScale int64
 	// frameStarts is each frame's start relative to the first frame's, then
 	// where the last ends.
 	frameStarts []int64
-	pes         []segmentPES
+	// headGap: the file has no audio for this long from the loop's start, so
+	// every lap starts with that gap. In the stream's time unit.
+	headGap int64
+	pes     []segmentPES
+}
+
+// segmentData is the data PES a lap plays, of one stream: whole PES, each with
+// the picture of its PTS.
+type segmentData struct {
+	pid int
+	pes []segmentPES
 }
 
 // loopSegment is one lap: the source packets of the loop window with partial
 // payload units removed at both ends, null packets added or removed at the end
 // to fit a constant rate, and the loop's first picture marked as a seam. Audio
-// packets are taken out: each lap places its audio in the free packets (nulls
-// and the window's audio packets) at or after where the source sends it.
+// packets, and those of data streams taken by PTS, are taken out: each lap
+// places its own in the free packets (nulls and the window's audio and data
+// packets) at or after where the source sends them.
 type loopSegment struct {
 	packets      []byte
 	sendTimes    []int64 // 27 MHz from the start of the lap, per packet
@@ -58,6 +71,7 @@ type loopSegment struct {
 	scte35       []*scte35Patcher
 	scte35PIDs   []int
 	audio        []segmentAudio
+	data         []segmentData
 
 	stripped        int // payload removed: partial units at the window's ends
 	removedNulls    int
@@ -189,17 +203,13 @@ func cutPESHead(p *segmentPES, cut int, pts uint64) bool {
 
 // stripPartialUnits removes payload units cut by the window's edges: a PES or
 // section that started before the window (its packets at the start are orphans
-// a decoder would append to the previous lap), or that ends after it. Audio is
-// placed by each lap instead.
-func stripPartialUnits(window []byte, idx *streamIndex, start, end int) int {
+// a decoder would append to the previous lap), or that ends after it. Audio and
+// data on placed PIDs are placed by each lap instead.
+func stripPartialUnits(window []byte, idx *streamIndex, start, end int, placed map[int]bool) int {
 	orphanEnd := make(map[int]int)
 	tailStart := make(map[int]int)
-	isAudio := make(map[int]bool)
-	for _, a := range idx.audio {
-		isAudio[a.pid] = true
-	}
 	for pid, units := range idx.units {
-		if isAudio[pid] {
+		if placed[pid] {
 			continue
 		}
 		first := sort.Search(len(units), func(k int) bool { return units[k].first >= start })
@@ -239,12 +249,23 @@ func stripPartialUnits(window []byte, idx *streamIndex, start, end int) int {
 	return stripped
 }
 
+// appendPlacedPacket appends a copy of a source packet for a lap to place,
+// which may be in another lap than its own, so it carries no clock reference and
+// no discontinuity.
+func appendPlacedPacket(packets, source []byte) []byte {
+	packets = append(packets, source...)
+	p := packets[len(packets)-PacketSize:]
+	clearDiscontinuity(p)
+	removeClockReferences(p)
+	return packets
+}
+
 // prepareAudio collects the loop's audio of one stream: copies of its source
 // PES without clock references, each packet due where the source sends it
 // relative to the window, in the lap before, during or after the one it plays in.
 func prepareAudio(data []byte, idx *streamIndex, plan *loopPlan, fit audioFit, lapPacketOfSlot []int, headCuts *int) segmentAudio {
 	st := &idx.audio[fit.stream]
-	audio := segmentAudio{pid: st.pid, timeScale: st.timeScale}
+	audio := segmentAudio{pid: st.pid, timeScale: st.timeScale, headGap: fit.headGap}
 	framesEnd := fit.firstFrame + fit.frameCount
 	first := st.frames[fit.firstFrame]
 	for f := fit.firstFrame; f < framesEnd; f++ {
@@ -270,10 +291,7 @@ func prepareAudio(data []byte, idx *streamIndex, plan *loopPlan, fit audioFit, l
 		}
 		for c := src.firstChunk; c < src.firstChunk+src.chunkCount; c++ {
 			ch := st.chunks[c]
-			p.packets = append(p.packets, packetAt(data, ch.packet)...)
-			pkt := p.packets[len(p.packets)-PacketSize:]
-			clearDiscontinuity(pkt)
-			removeClockReferences(pkt)
+			p.packets = appendPlacedPacket(p.packets, packetAt(data, ch.packet))
 			slot := ch.packet - plan.startPacket - p.lapShift*window
 			p.targets = append(p.targets, lapPacketOfSlot[min(max(slot, 0), window)])
 			p.packetEnds = append(p.packetEnds, ch.endOffset)
@@ -290,6 +308,32 @@ func prepareAudio(data []byte, idx *streamIndex, plan *loopPlan, fit audioFit, l
 		audio.pes = append(audio.pes, p)
 	}
 	return audio
+}
+
+// prepareData collects the loop's data PES of one stream, as prepareAudio its
+// audio: whole PES, each due where the source sends it relative to the window.
+func prepareData(data []byte, idx *streamIndex, plan *loopPlan, fit dataFit, lapPacketOfSlot []int) segmentData {
+	st := &idx.data[fit.stream]
+	d := segmentData{pid: st.pid}
+	window := plan.endPacket - plan.startPacket
+	for _, k := range fit.members {
+		src := st.pes[k]
+		var p segmentPES
+		switch {
+		case src.firstPacket >= plan.endPacket:
+			p.lapShift = 1
+		case src.firstPacket < plan.startPacket:
+			p.lapShift = -1
+		}
+		for c := src.firstChunk; c < src.firstChunk+src.chunkCount; c++ {
+			packet := st.chunks[c].packet
+			p.packets = appendPlacedPacket(p.packets, packetAt(data, packet))
+			slot := packet - plan.startPacket - p.lapShift*window
+			p.targets = append(p.targets, lapPacketOfSlot[min(max(slot, 0), window)])
+		}
+		d.pes = append(d.pes, p)
+	}
+	return d
 }
 
 // markSeamPictures marks an open GOP or a recovery point at the loop's first
@@ -351,10 +395,10 @@ func markSeamPictures(seg *loopSegment, idx *streamIndex, first int) int {
 // fillSeamPCRGap keeps the PCR within 40 ms (ETSI TR 101 290, 5.2.2) from the
 // lap's last PCR to the next lap's first: null packets there become packets
 // with only a PCR, and a variable-rate lap that ends early gets more such
-// packets at its end. The null packets marked in audioSlots are left for the
-// audio. It returns how many packets carry an added PCR, and warns about a gap
-// it cannot fill.
-func fillSeamPCRGap(seg *loopSegment, audioSlots []bool) int {
+// packets at its end. The null packets marked in placedSlots are left for the
+// audio and data each lap places. It returns how many packets carry an added
+// PCR, and warns about a gap it cannot fill.
+func fillSeamPCRGap(seg *loopSegment, placedSlots []bool) int {
 	lapTime := seg.duration * pcrPerTick
 	times := seg.sendTimes
 	isPCR := func(i int) bool {
@@ -406,8 +450,8 @@ func fillSeamPCRGap(seg *loopSegment, audioSlots []bool) int {
 
 	// Each added PCR goes in the last null packet that keeps it within
 	// pcrFillSpacing of the PCR before, or the first one after when none does.
-	// The window's audio packets are left for its audio.
-	isFreeNull := func(i int) bool { return !audioSlots[i] && tsPID(packetAt(seg.packets, i)) == nullPID }
+	// The window's audio and data packets are left for the packets laps place.
+	isFreeNull := func(i int) bool { return !placedSlots[i] && tsPID(packetAt(seg.packets, i)) == nullPID }
 	nextChance := make([]int64, len(seam))
 	chance := nextLapPCR
 	for k := len(seam) - 1; k >= 0; k-- {
@@ -523,7 +567,15 @@ func buildSegment(data []byte, idx *streamIndex, plan *loopPlan) (*loopSegment, 
 		// Timestamps and counters are made continuous, so nothing is discontinuous.
 		clearDiscontinuity(p)
 	}
-	seg.stripped = stripPartialUnits(window, idx, start, end)
+	// Each lap places its own audio and the data PES of its pictures.
+	isPlaced := make(map[int]bool)
+	for _, a := range idx.audio {
+		isPlaced[a.pid] = true
+	}
+	for _, f := range plan.data {
+		isPlaced[idx.data[f.stream].pid] = f.placedByLap()
+	}
+	seg.stripped = stripPartialUnits(window, idx, start, end, isPlaced)
 
 	// SCTE-35 cues the plan leaves out free their packets, and cues sent before
 	// the window for a break inside the loop go at the start of the lap. The
@@ -563,34 +615,30 @@ func buildSegment(data []byte, idx *streamIndex, plan *loopPlan) (*loopSegment, 
 		seg.addedNulls = max(plan.lapPackets-count, 0)
 	}
 
-	// Each lap places its own audio. A packet carrying the PCR keeps it.
-	isAudio := make(map[int]bool)
-	for _, a := range idx.audio {
-		isAudio[a.pid] = true
-	}
-	wasAudio := make([]bool, windowPackets)
+	// A placed packet carrying the PCR keeps it.
+	wasPlaced := make([]bool, windowPackets)
 	for slot := 0; slot < windowPackets; slot++ {
-		if p := packetAt(window, slot); isAudio[tsPID(p)] {
+		if p := packetAt(window, slot); isPlaced[tsPID(p)] {
 			stripPayload(p)
-			wasAudio[slot] = true
+			wasPlaced[slot] = true
 		}
 	}
 
 	var sourceIndex []int
-	var audioSlots []bool
+	var placedSlots []bool
 	lapPacketOfSlot := make([]int, windowPackets+1)
 	seg.packets = make([]byte, 0, (count+seg.addedNulls)*PacketSize)
 	seg.packets = append(seg.packets, injected...)
 	for range nInjected {
 		sourceIndex = append(sourceIndex, start)
-		audioSlots = append(audioSlots, false)
+		placedSlots = append(placedSlots, false)
 	}
 	for slot := 0; slot < windowPackets; slot++ {
 		lapPacketOfSlot[slot] = seg.packetCount()
 		if kept[slot] {
 			seg.packets = append(seg.packets, packetAt(window, slot)...)
 			sourceIndex = append(sourceIndex, start+slot)
-			audioSlots = append(audioSlots, wasAudio[slot])
+			placedSlots = append(placedSlots, wasPlaced[slot])
 		}
 	}
 	lapPacketOfSlot[windowPackets] = seg.packetCount()
@@ -598,7 +646,7 @@ func buildSegment(data []byte, idx *streamIndex, plan *loopPlan) (*loopSegment, 
 		seg.packets = append(seg.packets, make([]byte, PacketSize)...)
 		writeNullPacket(packetAt(seg.packets, seg.packetCount()-1))
 		sourceIndex = append(sourceIndex, end)
-		audioSlots = append(audioSlots, false)
+		placedSlots = append(placedSlots, false)
 	}
 	for pid := range renumber {
 		renumberCC(seg, pid)
@@ -631,7 +679,7 @@ func buildSegment(data []byte, idx *streamIndex, plan *loopPlan) (*loopSegment, 
 			seg.sendTimes[i] = prev
 		}
 	}
-	seg.addedPCRPackets = fillSeamPCRGap(seg, audioSlots)
+	seg.addedPCRPackets = fillSeamPCRGap(seg, placedSlots)
 	seg.lapPackets = seg.packetCount()
 	if plan.constantRate {
 		seg.lapPackets = plan.lapPackets
@@ -652,6 +700,11 @@ func buildSegment(data []byte, idx *streamIndex, plan *loopPlan) (*loopSegment, 
 	for _, fit := range plan.audio {
 		if fit.frameCount > 0 {
 			seg.audio = append(seg.audio, prepareAudio(data, idx, plan, fit, lapPacketOfSlot, &seg.audioHeadCuts))
+		}
+	}
+	for _, fit := range plan.data {
+		if fit.placedByLap() {
+			seg.data = append(seg.data, prepareData(data, idx, plan, fit, lapPacketOfSlot))
 		}
 	}
 

@@ -101,9 +101,51 @@ type continuityError struct {
 	pid    int
 }
 
-// PassThroughStream is an elementary stream that is neither the looped video nor
-// audio (e.g. SMPTE-2038 ANC data or subtitles). Its packets stay where they
-// are, with their timestamps advanced by the loop duration each lap.
+// dataTiming says whether each lap can take a data stream's PES by their PTS.
+type dataTiming uint8
+
+const (
+	dataByPTS            dataTiming = iota
+	dataUnreadableHeader            // scrambled, split across packets or not at the start of a packet's payload
+	dataNoPTS
+	dataOutOfOrder // a PES has an earlier PTS than one sent before it
+)
+
+func (d dataTiming) String() string {
+	switch d {
+	case dataByPTS:
+		return "by PTS"
+	case dataUnreadableHeader:
+		return "a PES header that cannot be read"
+	case dataNoPTS:
+		return "a PES without a PTS"
+	case dataOutOfOrder:
+		return "a PES with an earlier PTS than one sent before it"
+	}
+	return "unknown"
+}
+
+type dataPES struct {
+	firstPacket int
+	pts         int64 // unwrapped, 90 kHz
+	firstChunk  int   // into dataStream.chunks
+	chunkCount  int
+}
+
+// dataStream is a PES stream other than video and audio, such as SMPTE ST 2038
+// ANC, teletext or subtitles: each PES goes with the picture of its PTS.
+type dataStream struct {
+	pid        int
+	streamType byte
+	label      string
+	timing     dataTiming
+	pes        []dataPES
+	chunks     []payloadChunk
+}
+
+// PassThroughStream is a stream of the program that is neither looped video,
+// audio, a data PES stream nor SCTE-35: sections, or a second video. Its packets
+// stay where the source sends them, so it breaks at every seam.
 type PassThroughStream struct {
 	PID        int    `json:"pid"`
 	StreamType uint8  `json:"streamType"`
@@ -122,6 +164,7 @@ type streamIndex struct {
 	pictures      []videoPicture // decode order
 	audio         []audioStream
 	scte35PIDs    []int
+	data          []dataStream
 	passThrough   []PassThroughStream
 	pcrSamples    []pcrSample
 	// discontinuities are packets of the program with discontinuity_indicator set.
@@ -426,8 +469,8 @@ func audioCodecOf(es pmtStream) (audioCodec, bool) {
 	return audioUnknown, false
 }
 
-// passThroughLabel names a stream that is neither looped video nor audio.
-func passThroughLabel(es pmtStream) string {
+// streamLabel names a stream that is neither looped video nor audio.
+func streamLabel(es pmtStream) string {
 	switch {
 	case es.hasDescriptor(descANC) || es.registration("VANC"):
 		return "smpte-2038"
@@ -475,7 +518,17 @@ const (
 	roleOther pidRole = iota
 	roleVideo
 	roleAudio
+	roleData
 )
+
+// looped reports the roles whose PES the loop is cut at and timed by.
+func (r pidRole) looped() bool { return r == roleVideo || r == roleAudio }
+
+type dataAssembly struct {
+	open      bool
+	endOffset int
+	pts       unwrapper
+}
 
 type audioAssembly struct {
 	open       bool
@@ -501,9 +554,11 @@ type scanner struct {
 	idx            *streamIndex
 	role           [numPIDs]pidRole
 	audioSlot      [numPIDs]int
+	dataSlot       [numPIDs]int
 	carriesPES     [numPIDs]bool
 	continuity     [numPIDs]pidContinuity
 	audio          []audioAssembly
+	data           []dataAssembly
 	scte35         map[int]*sectionAssembler
 	pcrUnwrap      unwrapper
 	videoPTS       unwrapper
@@ -545,9 +600,14 @@ func newScanner(idx *streamIndex, p program) *scanner {
 		} else if es.streamType == stSCTE35 {
 			idx.scte35PIDs = append(idx.scte35PIDs, es.pid)
 			s.scte35[es.pid] = &sectionAssembler{}
+		} else if _, video := videoCodecOf(es.streamType); !video && !carriesSections(es.streamType) {
+			s.dataSlot[es.pid] = len(idx.data)
+			idx.data = append(idx.data, dataStream{pid: es.pid, streamType: es.streamType, label: streamLabel(es)})
+			s.data = append(s.data, dataAssembly{pts: unwrapper{wrap: ptsWrapU}})
+			s.role[es.pid] = roleData
 		} else {
 			idx.passThrough = append(idx.passThrough,
-				PassThroughStream{PID: es.pid, StreamType: es.streamType, Label: passThroughLabel(es)})
+				PassThroughStream{PID: es.pid, StreamType: es.streamType, Label: streamLabel(es)})
 		}
 		s.carriesPES[es.pid] = !carriesSections(es.streamType)
 	}
@@ -572,7 +632,7 @@ func (s *scanner) addPacket(i int, b []byte) {
 	s.checkContinuity(i, pid, b)
 	s.checkPESStart(i, pid, b)
 	s.trackUnits(i, pid, b)
-	if (pid == s.idx.pcrPID || s.role[pid] != roleOther) && tsAFFlags(b)&afFlagDiscontinuity != 0 {
+	if (pid == s.idx.pcrPID || s.role[pid].looped()) && tsAFFlags(b)&afFlagDiscontinuity != 0 {
 		s.idx.discontinuities = append(s.idx.discontinuities, i)
 	}
 	if pid == s.idx.pcrPID && tsCarriesPCR(b) {
@@ -587,6 +647,8 @@ func (s *scanner) addPacket(i int, b []byte) {
 		s.addVideoPacket(i, b)
 	case roleAudio:
 		s.addAudioPacket(s.audioSlot[pid], i, b)
+	case roleData:
+		s.addDataPacket(s.dataSlot[pid], i, b)
 	}
 }
 
@@ -790,6 +852,51 @@ func (s *scanner) finalizeAudio(slot int) {
 	}
 }
 
+func (s *scanner) addDataPacket(slot, i int, b []byte) {
+	a := &s.data[slot]
+	st := &s.idx.data[slot]
+	if !tsHasPayload(b) || st.timing != dataByPTS {
+		return
+	}
+	off := tsPayloadOffset(b)
+	if !tsPUSI(b) {
+		if a.open {
+			a.endOffset += PacketSize - off
+			st.chunks = append(st.chunks, payloadChunk{packet: i, endOffset: a.endOffset})
+		}
+		return
+	}
+	s.finishDataPES(slot)
+	h, ok := findPESHeader(b)
+	switch {
+	case !ok:
+		st.timing = dataUnreadableHeader
+		return
+	case h.pts < 0:
+		st.timing = dataNoPTS
+		return
+	}
+	pts := a.pts.unwrap(readTimestamp(b[h.pts:]))
+	if len(st.pes) > 0 && pts < st.pes[len(st.pes)-1].pts {
+		st.timing = dataOutOfOrder
+		return
+	}
+	a.open, a.endOffset = true, PacketSize-off
+	st.pes = append(st.pes, dataPES{firstPacket: i, pts: pts, firstChunk: len(st.chunks)})
+	st.chunks = append(st.chunks, payloadChunk{packet: i, endOffset: a.endOffset})
+}
+
+func (s *scanner) finishDataPES(slot int) {
+	a := &s.data[slot]
+	if !a.open {
+		return
+	}
+	a.open = false
+	st := &s.idx.data[slot]
+	pes := &st.pes[len(st.pes)-1]
+	pes.chunkCount = len(st.chunks) - pes.firstChunk
+}
+
 // maxFieldPairGap: the second field of a frame is shown one field period after
 // the first, at most 1/48 s, and never further apart than this.
 const maxFieldPairGap = ticksPerSec / 24
@@ -863,6 +970,12 @@ func (s *scanner) finish() error {
 		s.finishAudioPES(slot, true)
 		s.finalizeAudio(slot)
 	}
+	for slot := range s.data {
+		s.finishDataPES(slot)
+		if st := &idx.data[slot]; st.timing != dataByPTS {
+			st.pes, st.chunks = nil, nil
+		}
+	}
 	s.pairFields()
 	s.promoteMPEG2ClosedGOPs()
 	for pid, a := range s.scte35 {
@@ -881,7 +994,7 @@ func (s *scanner) finish() error {
 			"%d packets have an adaptation field longer than the packet; they are replaced by null packets", s.corrupt))
 	}
 	// Video and audio are cut at their PES, so a PES starting inside a packet
-	// cannot be looped; other streams are copied whole and only break at the seam.
+	// cannot be looped; other streams only break at the seam.
 	misplacedOn := func(looped bool) string {
 		var where []string
 		pids := make([]int, 0, len(s.misplacedStart))
@@ -890,7 +1003,7 @@ func (s *scanner) finish() error {
 		}
 		sort.Ints(pids)
 		for _, pid := range pids {
-			if (s.role[pid] != roleOther) != looped {
+			if s.role[pid].looped() != looped {
 				continue
 			}
 			m := s.misplacedStart[pid]

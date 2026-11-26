@@ -301,8 +301,9 @@ type loopOptions struct {
 }
 
 // audioFit is the audio of one stream that a lap plays: the frames from the
-// one nearest the loop's first picture on, wherever the source sends them, so
-// the audio seam is where the video's is.
+// one nearest the loop's first picture to the loop's end, wherever the source
+// sends them, so the audio loops the same time as the video and its seam is
+// where the video's is.
 type audioFit struct {
 	stream     int // into streamIndex.audio
 	firstPES   int
@@ -311,14 +312,41 @@ type audioFit struct {
 	// frameCount is enough to end a lap anywhere within half a frame of the
 	// loop's end, unless the file has less.
 	frameCount int
-	// excess is their duration minus the loop's, in the stream's time unit.
-	// When negative, every seam has that gap.
+	// excess is their duration minus the time from the first frame to the
+	// loop's end, in the stream's time unit. When negative, every lap ends with
+	// that gap.
 	excess int64
 	// seamOffset is the first frame's start minus the first picture's PTS, 90 kHz.
 	seamOffset int64
-	// seamOK: the first frame is within its own duration of the first picture.
+	// headGap, in the stream's time unit: the file holds no audio for this long
+	// from the loop's start, so every lap starts with that gap.
+	headGap int64
+	// seamOK: the file holds the audio of the loop's start: the first frame is
+	// within half its duration after the first picture, and within its duration
+	// before.
 	seamOK bool
 }
+
+// dataFit is the data PES of one stream that a lap plays: those whose PTS lie
+// within the loop's pictures, from wherever the source sends them.
+type dataFit struct {
+	stream int // into streamIndex.data
+	// members are into dataStream.pes, in the order sent; empty when the stream
+	// stays where the source sends it.
+	members []int
+	// missingAtStart are PES of the loop's first pictures that the file lacks: as
+	// many as the window holds of pictures after the loop, when the file has none
+	// before the window.
+	missingAtStart int
+	// missingAtEnd likewise at the loop's end, from the window's PES of pictures
+	// before the loop.
+	missingAtEnd int
+	// keptInPlace says why the stream stays where the source sends it; empty when
+	// each lap takes its own PES.
+	keptInPlace string
+}
+
+func (f *dataFit) placedByLap() bool { return f.keptInPlace == "" }
 
 // loopPlan is a loop: the packets [startPacket, endPacket) from one video
 // access point to a later one, played over and over.
@@ -329,7 +357,12 @@ type loopPlan struct {
 	startPacket  int
 	endPacket    int
 	duration     int64 // 90 kHz, from the two access points' PTS
-	frames       int   // coded pictures in a lap
+	// firstPTS is the earliest PTS of the window's pictures, 90 kHz. Every stream
+	// loops the interval of the loop's duration from there, so a lap's audio and
+	// data are those of its own pictures. It comes before the first access
+	// point's PTS when pictures decoded after it are shown first.
+	firstPTS int64
+	frames   int // coded pictures in a lap
 	// fieldPeriods is how long a lap's pictures are shown, in field periods: two
 	// a frame.
 	fieldPeriods int64
@@ -348,6 +381,7 @@ type loopPlan struct {
 	// packets at the end of the window, unless the window has too few.
 	outputPackets int
 	audio         []audioFit
+	data          []dataFit
 	scte35        []*LoopSCTE35
 	warnings      []string
 }
@@ -367,6 +401,7 @@ type loopCandidate struct {
 	audioOK      bool
 	seamOK       bool
 	duration     int64
+	firstPTS     int64 // the earliest of the window's pictures
 	dtsStepError int64 // 90 kHz
 }
 
@@ -412,8 +447,9 @@ func (r *rangeMax) max(first, end int) int64 {
 	return max(values[first], values[end-(1<<level)])
 }
 
-// fitAudio finds the audio of stream slot that a lap starting at startPTS plays.
-func fitAudio(idx *streamIndex, slot int, startPTS int64, startPacket, endPacket int, duration int64) audioFit {
+// fitAudio finds the audio of stream slot that a lap whose pictures start at
+// firstPTS plays.
+func fitAudio(idx *streamIndex, slot int, firstPTS int64, startPacket, endPacket int, duration int64) audioFit {
 	st := &idx.audio[slot]
 	scale := st.timeScale
 	fit := audioFit{stream: slot, excess: -duration * scale}
@@ -423,8 +459,8 @@ func fitAudio(idx *streamIndex, slot int, startPTS int64, startPacket, endPacket
 	}
 	// Audio and video timestamps are unwrapped separately, so they may be whole
 	// wraps apart.
-	wraps := int64(math.Round(float64(st.pes[0].pts-startPTS) / float64(PtsWrap)))
-	loopStart := (startPTS + wraps*PtsWrap) * scale
+	wraps := int64(math.Round(float64(st.pes[0].pts-firstPTS) / float64(PtsWrap)))
+	loopStart := (firstPTS + wraps*PtsWrap) * scale
 	first := sort.Search(len(frames), func(k int) bool { return frames[k].start >= loopStart })
 	if first == len(frames) || (first > 0 && loopStart-frames[first-1].start <= frames[first].start-loopStart) {
 		first--
@@ -446,8 +482,20 @@ func fitAudio(idx *streamIndex, slot int, startPTS int64, startPacket, endPacket
 		reachable = st.pes[unreachable].firstFrame
 	}
 
+	// A file without the audio of the loop's start leaves that gap in every lap:
+	// the lap's audio still ends at the loop's end, not a loop after its first
+	// frame, which would play audio from after the loop's end at its start.
+	firstOffset := frames[first].start - loopStart
+	headGap := int64(0)
+	if firstOffset*2 > frames[first].duration {
+		headGap = firstOffset
+	}
+	span := duration*scale - headGap
+	if span <= 0 {
+		return fit
+	}
 	// Enough frames for a lap to end within half a frame of the loop's end.
-	wantedEnd := frames[first].start + duration*scale + frames[first].duration
+	wantedEnd := frames[first].start + span + frames[first].duration
 	end := first + sort.Search(len(frames)-first, func(k int) bool { return frames[first+k].start >= wantedEnd })
 	end = min(end, reachable)
 	if end <= first {
@@ -458,9 +506,78 @@ func fitAudio(idx *streamIndex, slot int, startPTS int64, startPacket, endPacket
 	fit.frameCount = end - first
 	fit.firstPES = firstPES
 	fit.pesCount = pesOf(fit.firstFrame+fit.frameCount-1) - firstPES + 1
-	fit.excess = last.start + last.duration - frames[first].start - duration*scale
-	fit.seamOffset = (frames[first].start - loopStart) / scale
-	fit.seamOK = absInt64(frames[first].start-loopStart) <= frames[first].duration
+	fit.excess = last.start + last.duration - frames[first].start - span
+	fit.seamOffset = firstOffset / scale
+	fit.headGap = headGap
+	fit.seamOK = headGap == 0 && absInt64(firstOffset) <= frames[first].duration
+	return fit
+}
+
+// fitData finds the data PES of stream slot that each lap of plan plays.
+func fitData(idx *streamIndex, slot int, plan *loopPlan) dataFit {
+	st := &idx.data[slot]
+	fit := dataFit{stream: slot}
+	if st.timing != dataByPTS {
+		fit.keptInPlace = "it has " + st.timing.String()
+		return fit
+	}
+	if len(st.pes) == 0 {
+		return fit
+	}
+
+	// A PES goes with the picture nearest its PTS, so a lap takes those from half
+	// a frame before the earliest of its pictures to half a frame before the next
+	// lap's. Data and video timestamps are unwrapped separately, so they may be
+	// whole wraps apart.
+	wraps := int64(math.Round(float64(st.pes[0].pts-plan.firstPTS) / float64(PtsWrap)))
+	duration := plan.duration
+	halfFrame := duration / int64(2*max(plan.frames, 1))
+	begin := plan.firstPTS - halfFrame
+	end := begin + duration
+	ptsOf := func(p *dataPES) int64 { return p.pts - wraps*PtsWrap }
+	startPacket, endPacket := plan.startPacket, plan.endPacket
+	inWindow := func(p *dataPES) bool { return p.firstPacket >= startPacket && p.firstPacket < endPacket }
+	for k := range st.pes {
+		if p := &st.pes[k]; inWindow(p) && (ptsOf(p) < begin-duration || ptsOf(p) >= end+duration) {
+			fit.keptInPlace = "its PES are timed more than a loop away from the pictures sent with them"
+			return fit
+		}
+	}
+
+	// A file that starts at the loop, as when trimmed to it, lacks the PES the
+	// source sends before it: those of the first pictures when the data leads the
+	// video. The window then holds PES of pictures after the loop, and the file
+	// none before the window. Likewise at the end when the data lags.
+	sentBefore, sentAfter := false, false
+	afterLoop, beforeLoop := 0, 0
+	for k := range st.pes {
+		p := &st.pes[k]
+		sentBefore = sentBefore || p.firstPacket < startPacket
+		sentAfter = sentAfter || p.firstPacket >= endPacket
+		switch pts := ptsOf(p); {
+		case pts >= begin && pts < end:
+			fit.members = append(fit.members, k)
+		case !inWindow(p):
+		case pts >= end:
+			afterLoop++
+		default:
+			beforeLoop++
+		}
+	}
+	if !sentBefore {
+		fit.missingAtStart = afterLoop
+	}
+	if !sentAfter {
+		fit.missingAtEnd = beforeLoop
+	}
+
+	// A lap's PES are sent in the lap before, during or after it.
+	window := endPacket - startPacket
+	for _, k := range fit.members {
+		if sentAt := st.pes[k].firstPacket; sentAt+window < startPacket || sentAt >= endPacket+window {
+			return dataFit{stream: slot, keptInPlace: "some of the loop's PES are sent more than a loop away from it"}
+		}
+	}
 	return fit
 }
 
@@ -580,6 +697,16 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 		}
 	}
 	latestOfGOPs := newRangeMax(latest)
+	// The earliest PTS of each GOP, negated: a window's pictures start there, and
+	// before its access point when pictures decoded after it are shown first.
+	negatedEarliest := make([]int64, len(points)-1)
+	for g := range negatedEarliest {
+		negatedEarliest[g] = math.MinInt64
+		for p := points[g]; p < points[g+1]; p++ {
+			negatedEarliest[g] = max(negatedEarliest[g], -pics[p].pts)
+		}
+	}
+	negatedEarliestOfGOPs := newRangeMax(negatedEarliest)
 
 	// The longest window rejected because the PCR sends it much faster or slower
 	// than its video lasts (27 MHz), and the longest rejected because its DTS
@@ -590,7 +717,8 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 
 	evaluate := func(first, second int) *loopCandidate {
 		start, end := &pics[points[first]], &pics[points[second]]
-		c := &loopCandidate{start: first, end: second, duration: end.pts - start.pts}
+		c := &loopCandidate{start: first, end: second, duration: end.pts - start.pts,
+			firstPTS: -negatedEarliestOfGOPs.max(first, second)}
 		startPacket, endPacket := start.firstPacket, end.firstPacket
 		stretch := timeline.stretchOf(startPacket)
 		if stretch == nil || timeline.stretchOf(endPacket-1) != stretch {
@@ -639,7 +767,7 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 			c.duration*frameRate.Num == frames*ticksPerSec*frameRate.Den
 		c.audioOK = true
 		for s := range idx.audio {
-			fit := fitAudio(idx, s, start.pts, startPacket, endPacket, c.duration)
+			fit := fitAudio(idx, s, c.firstPTS, startPacket, endPacket, c.duration)
 			if fit.excess < 0 || !fit.seamOK {
 				c.audioOK = false
 				break
@@ -717,6 +845,7 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 		startPacket:  pics[points[best.start]].firstPacket,
 		endPacket:    pics[points[best.end]].firstPacket,
 		duration:     best.duration,
+		firstPTS:     best.firstPTS,
 		frames:       points[best.end] - points[best.start],
 		fieldPeriods: fieldPeriodsBefore[points[best.end]] - fieldPeriodsBefore[points[best.start]],
 		gops:         best.end - best.start,
@@ -766,33 +895,62 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 	}
 
 	for s := range idx.audio {
-		fit := fitAudio(idx, s, pics[plan.startPicture].pts, plan.startPacket, plan.endPacket, plan.duration)
+		fit := fitAudio(idx, s, plan.firstPTS, plan.startPacket, plan.endPacket, plan.duration)
 		plan.audio = append(plan.audio, fit)
 		pid := idx.audio[s].pid
+		ms := func(v int64) float64 { return float64(v) / float64(idx.audio[s].timeScale) / 90 }
 		if fit.frameCount == 0 {
 			plan.warnings = append(plan.warnings, fmt.Sprintf("audio PID %d: no audio near the loop; it is left out", pid))
 			continue
 		}
-		if fit.excess < 0 {
-			plan.warnings = append(plan.warnings, fmt.Sprintf("audio PID %d: the file holds %.1f ms less audio from "+
-				"the loop start than the loop lasts; every seam has that gap",
-				pid, float64(-fit.excess)/float64(idx.audio[s].timeScale)/90))
+		if fit.headGap > 0 {
+			plan.warnings = append(plan.warnings, fmt.Sprintf("audio PID %d: the file holds no audio for the first "+
+				"%.1f ms of the loop, as when it starts at the loop and the audio leads the video; every lap starts "+
+				"with that gap; start the file earlier", pid, ms(fit.headGap)))
 		}
-		if !fit.seamOK {
+		if fit.excess < 0 {
+			plan.warnings = append(plan.warnings, fmt.Sprintf("audio PID %d: the file's audio stops %.1f ms short of "+
+				"the loop's end; every lap ends with that gap", pid, ms(-fit.excess)))
+		}
+		if !fit.seamOK && fit.headGap == 0 {
 			plan.warnings = append(plan.warnings, fmt.Sprintf("audio PID %d: the audio nearest the loop start is "+
 				"%+.1f ms from it, so the audio seam is that far from the video's", pid, float64(fit.seamOffset)/90))
 		}
 	}
 
-	// Each lap keeps the counter pattern of every PID but audio, whose packets
-	// it counts afresh, so the source's errors there come back every lap.
-	audioPID := make(map[int]bool)
+	for s := range idx.data {
+		fit := fitData(idx, s, plan)
+		plan.data = append(plan.data, fit)
+		pid := idx.data[s].pid
+		if !fit.placedByLap() {
+			plan.warnings = append(plan.warnings, fmt.Sprintf("data PID %d: %s, so it stays where the source sends "+
+				"it; near the seam its PES may play with other pictures than in the source", pid, fit.keptInPlace))
+		}
+		if fit.missingAtStart > 0 {
+			plan.warnings = append(plan.warnings, fmt.Sprintf("data PID %d: the window holds %d PES of pictures "+
+				"after the loop but the file none before the window, as when it starts at the loop, so the PES of the "+
+				"loop's first pictures are missing from every lap; start the file earlier", pid, fit.missingAtStart))
+		}
+		if fit.missingAtEnd > 0 {
+			plan.warnings = append(plan.warnings, fmt.Sprintf("data PID %d: the window holds %d PES of pictures "+
+				"before the loop but the file none after the window, as when it ends at the loop, so the PES of the "+
+				"loop's last pictures are missing from every lap; end the file later", pid, fit.missingAtEnd))
+		}
+	}
+
+	// Each lap keeps the counter pattern of every PID but audio and the data it
+	// places, whose packets it counts afresh, so the source's errors there come
+	// back every lap.
+	countedAfresh := make(map[int]bool)
 	for _, a := range idx.audio {
-		audioPID[a.pid] = true
+		countedAfresh[a.pid] = true
+	}
+	for _, f := range plan.data {
+		countedAfresh[idx.data[f.stream].pid] = f.placedByLap()
 	}
 	repeated := 0
 	for _, e := range idx.continuityErrors {
-		if e.packet >= plan.startPacket && e.packet < plan.endPacket && !audioPID[e.pid] {
+		if e.packet >= plan.startPacket && e.packet < plan.endPacket && !countedAfresh[e.pid] {
 			repeated++
 		}
 	}

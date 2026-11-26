@@ -9,10 +9,12 @@ import (
 // continuous with the next lap, so the audio timestamps never jump. Each lap's
 // audio is shifted by an offset relative to the video, which moves by the loop
 // duration; the offset is never negative and always less than a frame, so it
-// never drifts and audio is never earlier than in the source.
+// never drifts and audio is never earlier than in the source. lapSpan is how
+// long a lap's audio lasts from its first frame: the loop duration, less the gap
+// at its start when the file lacks the audio there.
 type audioLapController struct {
 	frameStarts []int64
-	lapDuration int64
+	lapSpan     int64
 	offset      int64
 }
 
@@ -29,10 +31,10 @@ func (c *audioLapController) next() audioLapResult {
 	// Keep the frames up to the first boundary at or after where the next lap
 	// starts: the next lap's audio then follows on, shifted later than the video
 	// by less than a frame, never earlier.
-	target := c.lapDuration - c.offset
+	target := c.lapSpan - c.offset
 	kept := 1 + sort.Search(len(c.frameStarts)-1, func(k int) bool { return c.frameStarts[1+k] >= target })
 	kept = min(kept, frameCount)
-	nextOffset := c.offset + c.frameStarts[kept] - c.lapDuration
+	nextOffset := c.offset + c.frameStarts[kept] - c.lapSpan
 	if nextOffset < 0 {
 		return audioLapResult{keptFrames: kept, offset: c.offset, gap: true}
 	}
@@ -45,7 +47,9 @@ func (c *audioLapController) next() audioLapResult {
 type LapStatistics struct {
 	MovedAudioPackets    int `json:"movedAudioPackets"`    // sent in another lap than the one they play in
 	InsertedAudioPackets int `json:"insertedAudioPackets"` // no free packet in time, so the lap grew
-	AudioGaps            int `json:"audioGaps"`
+	MovedDataPackets     int `json:"movedDataPackets"`
+	InsertedDataPackets  int `json:"insertedDataPackets"`
+	AudioGaps            int `json:"audioGaps"` // laps whose audio has a gap at a seam, per stream
 	SCTE35Patched        int `json:"scte35Patched"`
 }
 
@@ -57,10 +61,11 @@ type audioLap struct {
 	gap        bool
 }
 
-type audioPacket struct {
-	stream   int
+// placedPacket is an audio or data packet that a lap places.
+type placedPacket struct {
+	stream   int // audio streams first, then data streams
 	target   int
-	byteAt   int // into lapWriter.audioBytes
+	byteAt   int // into lapWriter.placedBytes
 	lapShift int
 	// position is 2 * lap packet when it takes a free one, 2 * lap packet - 1
 	// when it goes before that one, as no free packet was left in time.
@@ -84,36 +89,39 @@ const (
 // can: continuity counters continue across laps, PCR and PES timestamps advance
 // by one loop duration per lap (audio by that plus its offset), the audio ends
 // on the frame the controller picks, and SCTE-35 pts_adjustment advances with
-// the video and its event IDs by the plan's step. Audio the source sends after
-// the window is sent at the start of the next lap, and audio it sends before the
-// window at the end of the previous one.
+// the video and its event IDs by the plan's step. Audio and data the source
+// sends after the window are sent at the start of the next lap, and those it
+// sends before the window at the end of the previous one.
 type lapWriter struct {
 	seg         *loopSegment
-	laps        int // laps a bounded run writes, so the last leaves out the next lap's audio; 0: endless
+	laps        int // laps a bounded run writes, so the last leaves out the next lap's audio and data; 0: endless
 	lap         int
 	controllers []audioLapController
 	// audioLaps holds per audio stream the audio of the previous, this and the next lap.
-	audioLaps    [][3]audioLap
-	audioPID     map[int]bool
-	scte35PID    map[int]bool
-	continuity   [numPIDs]lapContinuity
-	audioPackets []audioPacket
-	audioBytes   []byte
-	owner        []int   // per lap packet: the audio packet in it, or freePacket/droppedPacket
-	times        []int64 // 27 MHz from timeBase, per packet of the last write
-	timeBase     int64
-	stats        LapStatistics
+	audioLaps     [][3]audioLap
+	placedPID     map[int]bool
+	scte35PID     map[int]bool
+	continuity    [numPIDs]lapContinuity
+	placedPackets []placedPacket
+	placedBytes   []byte
+	owner         []int   // per lap packet: the placed packet in it, or freePacket/droppedPacket
+	times         []int64 // 27 MHz from timeBase, per packet of the last write
+	timeBase      int64
+	stats         LapStatistics
 }
 
 func newLapWriter(seg *loopSegment, laps int) *lapWriter {
-	w := &lapWriter{seg: seg, laps: laps, audioPID: make(map[int]bool), scte35PID: make(map[int]bool)}
+	w := &lapWriter{seg: seg, laps: laps, placedPID: make(map[int]bool), scte35PID: make(map[int]bool)}
 	for s, a := range seg.audio {
-		w.audioPID[a.pid] = true
+		w.placedPID[a.pid] = true
 		w.controllers = append(w.controllers, audioLapController{frameStarts: a.frameStarts,
-			lapDuration: seg.duration * a.timeScale})
+			lapSpan: seg.duration*a.timeScale - a.headGap})
 		w.audioLaps = append(w.audioLaps, [3]audioLap{})
 		w.audioLaps[s][1] = w.nextAudioLap(s, 0)
 		w.audioLaps[s][2] = w.nextAudioLap(s, 1)
+	}
+	for _, d := range seg.data {
+		w.placedPID[d.pid] = true
 	}
 	for _, pid := range seg.scte35PIDs {
 		w.scte35PID[pid] = true
@@ -125,8 +133,8 @@ func newLapWriter(seg *loopSegment, laps int) *lapWriter {
 // start of lap 0.
 func (w *lapWriter) sendTime(i int) int64 { return w.timeBase + w.times[i] }
 
-// writePreamble returns the PAT and PMT, then the first lap's audio that the
-// source sends before the window.
+// writePreamble returns the PAT and PMT, then the first lap's audio and data
+// that the source sends before the window.
 func (w *lapWriter) writePreamble() []byte {
 	out := append([]byte(nil), w.seg.preamble...)
 	for i := 0; i < len(out)/PacketSize; i++ {
@@ -139,15 +147,18 @@ func (w *lapWriter) writePreamble() []byte {
 		c.started, c.last = true, cc
 		p[3] = p[3]&0xf0 | cc
 	}
-	w.audioPackets, w.audioBytes = w.audioPackets[:0], w.audioBytes[:0]
+	w.placedPackets, w.placedBytes = w.placedPackets[:0], w.placedBytes[:0]
 	for s := range w.audioLaps {
 		w.collectAudio(s, w.audioLaps[s][1], -1)
 	}
-	for _, ap := range w.audioPackets {
-		out = append(out, w.audioBytes[ap.byteAt:ap.byteAt+PacketSize]...)
+	for s := range w.seg.data {
+		w.collectData(s, 0, -1)
+	}
+	for _, pp := range w.placedPackets {
+		out = append(out, w.placedBytes[pp.byteAt:pp.byteAt+PacketSize]...)
 		w.patchPacket(packetAt(out, len(out)/PacketSize-1), 0)
 	}
-	w.stats.MovedAudioPackets += len(w.audioPackets)
+	w.countMoved()
 	w.timeBase = 0
 	w.times = make([]int64, len(out)/PacketSize)
 	return out
@@ -155,35 +166,47 @@ func (w *lapWriter) writePreamble() []byte {
 
 // writeLap returns the next lap.
 func (w *lapWriter) writeLap() []byte {
-	w.audioPackets, w.audioBytes = w.audioPackets[:0], w.audioBytes[:0]
+	w.placedPackets, w.placedBytes = w.placedPackets[:0], w.placedBytes[:0]
+	nextLapFollows := w.laps <= 0 || w.lap+1 < w.laps
 	for s := range w.audioLaps {
 		laps := &w.audioLaps[s]
-		if laps[1].gap {
+		if laps[1].gap || w.seg.audio[s].headGap > 0 {
 			w.stats.AudioGaps++
 		}
 		w.collectAudio(s, laps[0], 1)
 		w.collectAudio(s, laps[1], 0)
-		if w.laps <= 0 || w.lap+1 < w.laps {
+		if nextLapFollows {
 			w.collectAudio(s, laps[2], -1)
 		}
 	}
-	w.placeAudio()
-
-	// A constant-rate lap keeps its length: unused free packets at its end make
-	// room for audio packets that had to be inserted.
-	baseCount := w.seg.packetCount()
-	var inserted []int
-	for i, ap := range w.audioPackets {
-		if ap.position%2 != 0 {
-			inserted = append(inserted, i)
+	for s := range w.seg.data {
+		if w.lap > 0 {
+			w.collectData(s, w.lap-1, 1)
 		}
-		if ap.lapShift != 0 {
-			w.stats.MovedAudioPackets++
+		w.collectData(s, w.lap, 0)
+		if nextLapFollows {
+			w.collectData(s, w.lap+1, -1)
 		}
 	}
-	w.stats.InsertedAudioPackets += len(inserted)
+	w.placePackets()
+
+	// A constant-rate lap keeps its length: unused free packets at its end make
+	// room for placed packets that had to be inserted.
+	baseCount := w.seg.packetCount()
+	var inserted []int
+	for i, pp := range w.placedPackets {
+		if pp.position%2 != 0 {
+			inserted = append(inserted, i)
+			if pp.stream < len(w.seg.audio) {
+				w.stats.InsertedAudioPackets++
+			} else {
+				w.stats.InsertedDataPackets++
+			}
+		}
+	}
+	w.countMoved()
 	sort.SliceStable(inserted, func(a, b int) bool {
-		return w.audioPackets[inserted[a]].position < w.audioPackets[inserted[b]].position
+		return w.placedPackets[inserted[a]].position < w.placedPackets[inserted[b]].position
 	})
 	count := baseCount + len(inserted)
 	for slot := baseCount - 1; slot >= 0 && w.seg.constantRate && count > w.seg.lapPackets; slot-- {
@@ -217,21 +240,21 @@ func (w *lapWriter) writeLap() []byte {
 			w.times = append(w.times, w.seg.sendTimes[min(slot, baseCount-1)])
 		}
 	}
-	audio := func(i int) []byte {
-		at := w.audioPackets[i].byteAt
-		return w.audioBytes[at : at+PacketSize]
+	placed := func(i int) []byte {
+		at := w.placedPackets[i].byteAt
+		return w.placedBytes[at : at+PacketSize]
 	}
 	next := 0
 	for slot := 0; slot <= baseCount; slot++ {
-		for ; next < len(inserted) && w.audioPackets[inserted[next]].position == 2*slot-1; next++ {
-			appendPacket(audio(inserted[next]), slot)
+		for ; next < len(inserted) && w.placedPackets[inserted[next]].position == 2*slot-1; next++ {
+			appendPacket(placed(inserted[next]), slot)
 		}
 		if slot == baseCount || w.owner[slot] == droppedPacket {
 			continue
 		}
 		switch {
 		case w.owner[slot] >= 0:
-			appendPacket(audio(w.owner[slot]), slot)
+			appendPacket(placed(w.owner[slot]), slot)
 		case scte35[slot] != nil:
 			appendPacket(scte35[slot], slot)
 		default:
@@ -251,22 +274,27 @@ func (w *lapWriter) writeLap() []byte {
 	return out
 }
 
-// writeEnding returns the last lap's audio that the next lap would have
-// carried, to end a bounded run without cutting it.
+// writeEnding returns the last lap's audio and data that the next lap would
+// have carried, to end a bounded run without cutting it.
 func (w *lapWriter) writeEnding() []byte {
 	var out []byte
 	w.times = w.times[:0]
-	w.audioPackets, w.audioBytes = w.audioPackets[:0], w.audioBytes[:0]
+	w.placedPackets, w.placedBytes = w.placedPackets[:0], w.placedBytes[:0]
 	for s := range w.audioLaps {
 		w.collectAudio(s, w.audioLaps[s][0], 1)
+	}
+	for s := range w.seg.data {
+		if w.lap > 0 {
+			w.collectData(s, w.lap-1, 1)
+		}
 	}
 	baseCount := w.seg.packetCount()
 	lapTime := w.seg.duration * pcrPerTick
 	w.timeBase = int64(w.lap) * lapTime
 	t := int64(0)
-	for _, ap := range w.audioPackets {
-		out = append(out, w.audioBytes[ap.byteAt:ap.byteAt+PacketSize]...)
-		slot := min(ap.target, baseCount-1)
+	for _, pp := range w.placedPackets {
+		out = append(out, w.placedBytes[pp.byteAt:pp.byteAt+PacketSize]...)
+		slot := min(pp.target, baseCount-1)
 		if w.seg.constantRate {
 			t = max(t, evenTime(slot, w.seg.lapPackets, lapTime))
 		} else {
@@ -275,7 +303,7 @@ func (w *lapWriter) writeEnding() []byte {
 		w.times = append(w.times, t)
 		w.patchPacket(packetAt(out, len(w.times)-1), t)
 	}
-	w.stats.MovedAudioPackets += len(w.audioPackets)
+	w.countMoved()
 	return out
 }
 
@@ -301,32 +329,73 @@ func (w *lapWriter) collectAudio(s int, al audioLap, lapShift int) {
 		if p.lapShift != lapShift || len(p.frameEnds) == 0 {
 			continue
 		}
-		begin := len(w.audioBytes)
-		w.audioBytes = append(w.audioBytes, p.packets...)
-		packets := w.audioBytes[begin:]
+		begin := len(w.placedBytes)
+		w.placedBytes = append(w.placedBytes, p.packets...)
+		packets := w.placedBytes[begin:]
 		frames := min(al.keptFrames-p.firstFrame, len(p.frameEnds))
 		if keep := p.frameEnds[frames-1]; keep < p.packetEnds[len(p.packetEnds)-1] {
 			truncatePES(packets, p.packetEnds, keep)
 		}
 		first := packetAt(packets, 0)
 		if h, ok := findPESHeader(first); ok {
-			for _, f := range []int{h.pts, h.dts} {
-				if f >= 0 {
-					writeTimestamp(first[f:], wrapAdd(readTimestamp(first[f:]), al.offset, ptsWrapU))
-				}
-			}
+			shiftPESTimestamps(first, h, al.offset)
 		}
 		for i := 0; i < p.packetCount(); i++ {
 			if tsPID(packetAt(packets, i)) == nullPID {
 				continue // cut off with the frames after the lap's last
 			}
-			w.audioPackets = append(w.audioPackets, audioPacket{stream: s, target: p.targets[i],
+			w.placedPackets = append(w.placedPackets, placedPacket{stream: s, target: p.targets[i],
 				byteAt: begin + i*PacketSize, lapShift: lapShift})
 		}
 	}
 }
 
-func (w *lapWriter) placeAudio() {
+// collectData collects the data PES of stream s's lap that are sent lapShift
+// laps from it.
+func (w *lapWriter) collectData(s, lap, lapShift int) {
+	offset := int64(lap) * w.seg.duration
+	for k := range w.seg.data[s].pes {
+		p := &w.seg.data[s].pes[k]
+		if p.lapShift != lapShift {
+			continue
+		}
+		begin := len(w.placedBytes)
+		w.placedBytes = append(w.placedBytes, p.packets...)
+		if first := w.placedBytes[begin : begin+PacketSize]; offset != 0 {
+			if h, ok := findPESHeader(first); ok {
+				shiftPESTimestamps(first, h, offset)
+			}
+		}
+		for i := 0; i < p.packetCount(); i++ {
+			w.placedPackets = append(w.placedPackets, placedPacket{stream: len(w.seg.audio) + s, target: p.targets[i],
+				byteAt: begin + i*PacketSize, lapShift: lapShift})
+		}
+	}
+}
+
+// countMoved counts the collected packets sent in another lap than their own.
+func (w *lapWriter) countMoved() {
+	for _, pp := range w.placedPackets {
+		switch {
+		case pp.lapShift == 0:
+		case pp.stream < len(w.seg.audio):
+			w.stats.MovedAudioPackets++
+		default:
+			w.stats.MovedDataPackets++
+		}
+	}
+}
+
+// shiftPESTimestamps adds offset to the PTS and DTS of a PES header.
+func shiftPESTimestamps(p []byte, h pesHeaderAt, offset int64) {
+	for _, f := range []int{h.pts, h.dts} {
+		if f >= 0 {
+			writeTimestamp(p[f:], wrapAdd(readTimestamp(p[f:]), offset, ptsWrapU))
+		}
+	}
+}
+
+func (w *lapWriter) placePackets() {
 	baseCount := w.seg.packetCount()
 	w.owner = w.owner[:0]
 	for range baseCount {
@@ -336,51 +405,51 @@ func (w *lapWriter) placeAudio() {
 		return w.owner[slot] == freePacket && tsPID(packetAt(w.seg.packets, slot)) == nullPID
 	}
 
-	// Audio the source sends inside the window goes back where it was.
-	for i := range w.audioPackets {
-		ap := &w.audioPackets[i]
-		ap.position = unplaced
-		if ap.lapShift == 0 && ap.target < baseCount && isFree(ap.target) {
-			w.owner[ap.target] = i
-			ap.position = 2 * ap.target
+	// A packet the source sends inside the window goes back where it was.
+	for i := range w.placedPackets {
+		pp := &w.placedPackets[i]
+		pp.position = unplaced
+		if pp.lapShift == 0 && pp.target < baseCount && isFree(pp.target) {
+			w.owner[pp.target] = i
+			pp.position = 2 * pp.target
 		}
 	}
 
 	// The rest takes the first free packet at or after where it is due that
 	// keeps its stream in order, or goes just before the stream's next placed
 	// packet when no free packet is left before it.
-	bounds := make([]int, len(w.audioPackets))
-	for begin := 0; begin < len(w.audioPackets); {
-		stream := w.audioPackets[begin].stream
+	bounds := make([]int, len(w.placedPackets))
+	for begin := 0; begin < len(w.placedPackets); {
+		stream := w.placedPackets[begin].stream
 		end := begin
-		for end < len(w.audioPackets) && w.audioPackets[end].stream == stream {
+		for end < len(w.placedPackets) && w.placedPackets[end].stream == stream {
 			end++
 		}
 		nextPlaced := baseCount
 		for i := end - 1; i >= begin; i-- {
 			bounds[i] = nextPlaced
-			if w.audioPackets[i].position != unplaced {
-				nextPlaced = w.audioPackets[i].target
+			if w.placedPackets[i].position != unplaced {
+				nextPlaced = w.placedPackets[i].target
 			}
 		}
 		last := -2
 		cursor := 0
 		for i := begin; i < end; i++ {
-			ap := &w.audioPackets[i]
-			if ap.position == unplaced {
-				slot := max(ap.target, (last+2)/2, cursor)
+			pp := &w.placedPackets[i]
+			if pp.position == unplaced {
+				slot := max(pp.target, (last+2)/2, cursor)
 				for slot < bounds[i] && !isFree(slot) {
 					slot++
 				}
 				cursor = slot
 				if slot < bounds[i] {
 					w.owner[slot] = i
-					ap.position = 2 * slot
+					pp.position = 2 * slot
 				} else {
-					ap.position = 2*bounds[i] - 1
+					pp.position = 2*bounds[i] - 1
 				}
 			}
-			last = ap.position
+			last = pp.position
 		}
 		begin = end
 	}
@@ -395,8 +464,8 @@ func (w *lapWriter) nextCC(pid int, source byte, hasPayload bool) byte {
 		}
 		return source
 	}
-	if w.audioPID[pid] {
-		// Audio comes from several laps' packets, so it is counted afresh.
+	if w.placedPID[pid] {
+		// Placed packets come from several laps, so they are counted afresh.
 		if c.started {
 			c.last = (c.last + 1) & 0x0f
 		} else {
@@ -442,19 +511,12 @@ func (w *lapWriter) patchPacket(p []byte, t int64) {
 		writePCR(p[o:], wrapAdd(readPCR(p[o:]), pcrOffset, pcrWrapU))
 	}
 
-	// Audio timestamps were set when its packets were collected, and SCTE-35
+	// Placed packets got their timestamps when they were collected, and SCTE-35
 	// sections are re-stamped whole.
-	if !tsPUSI(p) || !tsHasPayload(p) || w.audioPID[pid] || w.scte35PID[pid] {
+	if !tsPUSI(p) || !tsHasPayload(p) || w.placedPID[pid] || w.scte35PID[pid] {
 		return
 	}
-	videoOffset := int64(w.lap) * w.seg.duration
-	h, ok := findPESHeader(p)
-	if !ok || videoOffset == 0 {
-		return
-	}
-	for _, f := range []int{h.pts, h.dts} {
-		if f >= 0 {
-			writeTimestamp(p[f:], wrapAdd(readTimestamp(p[f:]), videoOffset, ptsWrapU))
-		}
+	if h, ok := findPESHeader(p); ok && w.lap > 0 {
+		shiftPESTimestamps(p, h, int64(w.lap)*w.seg.duration)
 	}
 }

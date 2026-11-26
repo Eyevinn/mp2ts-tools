@@ -23,6 +23,7 @@
       "cutAt": "frame"
     }
   ],
+  "data": [],
   "scte35Pids": [
     1001
   ],
@@ -34,6 +35,7 @@
     "startPacket": 4,
     "endPacket": 12742,
     "startPts": 132000,
+    "firstPts": 132000,
     "endPts": 7242000,
     "durationTicks": 7110000,
     "durationMs": 79000,
@@ -53,9 +55,11 @@
         "pes": 175,
         "units": 3705,
         "excessMs": 40,
+        "headGapMs": 0,
         "seamOffsetMs": -2.667
       }
     ],
+    "data": [],
     "scte35": [
       {
         "pid": 1001,
