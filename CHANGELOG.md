@@ -51,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pictures, 29.97 for 3:2 pulldown), and its `-scan` report gives a loop's frame periods and coded
   pictures, and the video's field pictures, field order and pulldown pictures
 
+### Fixed
+
+- mp2ts-nallister, mp2ts-pslister and mp2ts-loop no longer panic on a corrupt HEVC slice header,
+  with mp4ff v0.63.0. mp2ts-pslister shows the SPS fields that version adds
+
 ## [0.4.0] - 2026-10-09
 
 ### Added
