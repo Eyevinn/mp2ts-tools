@@ -7,7 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Nothing yet
+### Changed
+
+- mp2ts-loop has a new engine: a lap is the source's own packets, with only what a seam needs
+  patched (continuity counters, PCR, timestamps, the first and last audio PES)
+- mp2ts-loop loops variable-rate streams with their source timing, and keeps the PCR within 40 ms
+  across the seam
+- mp2ts-loop ranks loops by picture numbering, DTS step, field order, whole frame periods, audio
+  and output rate at the seam before length, and never spans a PCR discontinuity
+- mp2ts-loop paces UDP output by the output PCR, and sends the PAT and PMT once before the first lap
+- mp2ts-loop moves the PES of data streams (SMPTE ST 2038 ANC, teletext, subtitles) across the
+  seam with the picture of their PTS, as it does audio
+- mp2ts-loop loops audio and data over the PTS interval of the loop's pictures, and warns of a gap
+  in every lap when the file lacks a stream's audio or data at an end of the loop
+- mp2ts-loop `-m` defaults to one lap for file output, `-d` bounds the loop search, and a stream
+  that cannot be looped gives an error and exit status 1
+- mp2ts-loop `-scan` report has a new format with the access points, the chosen loop, the lap,
+  continuity errors and warnings
+
+### Added
+
+- mp2ts-loop loops AVC and HEVC streams without IDR or CRA from recovery point SEI, marked with
+  `broken_link_flag` at the seam
+- mp2ts-loop reads E-AC-3, and cuts audio whose frames it does not parse (LATM, S302M, AC-4, or a
+  PES damaged by a lost packet) on PES boundaries
+- mp2ts-loop `-o -` writes to stdout, `-ttl` sets the multicast TTL, `-q` silences the report, and
+  the input may be `-` for stdin or a named pipe
+- mp2ts-loop reports the source's continuity errors and those inside the loop, replaces corrupt
+  packets by null packets, and warns when the PAT lists more than one program
+- mp2ts-loop refuses content whose video or audio PES do not start at a TS packet, an ISDB-T BTS,
+  a video DTS that counts pictures, and a PCR that does not keep time with the video
+- mp2ts-loop pairs field pictures (MPEG-2, H.264 PAFF, H.265) into frames and keeps the field
+  order and pulldown cadence across the seam, so 3:2 pulldown loops hold whole cycles
+- mp2ts-loop detects the frame rate from how long pictures are shown, and its `-scan` report
+  gives the field pictures, field order and pulldown pictures
+
+### Fixed
+
+- mp2ts-nallister, mp2ts-pslister and mp2ts-loop no longer panic on a corrupt HEVC slice header,
+  with mp4ff v0.63.0. mp2ts-pslister shows the SPS fields that version adds
+- mp2ts-loop no longer repeats the payload of an audio packet that the source sends twice
 
 ## [0.4.0] - 2026-10-09
 

@@ -2,7 +2,6 @@ package internal
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -132,12 +131,12 @@ func TestPlanSCTE35(t *testing.T) {
 			ls.Sections, ls.Moved, ls.Kept, ls.EventIDStep)
 	}
 	for _, pkt := range []int{300, 500, 700, 800, 850, 1099} {
-		if !ls.dropped(pkt) {
+		if !ls.drop[pkt] {
 			t.Errorf("packet %d should be dropped", pkt)
 		}
 	}
 	for _, pkt := range []int{200, 210, 400, 450, 600, 650, 900} {
-		if ls.dropped(pkt) {
+		if ls.drop[pkt] {
 			t.Errorf("packet %d should be kept", pkt)
 		}
 	}
@@ -264,7 +263,7 @@ func injectSCTE35(t *testing.T, src string, pid, from int, cues [][]byte) string
 	}
 	i := from * PacketSize
 	for _, sec := range cues {
-		for ; i+PacketSize <= len(data) && tsPID(data[i:]) != stuffingPID; i += PacketSize {
+		for ; i+PacketSize <= len(data) && tsPID(data[i:]) != nullPID; i += PacketSize {
 		}
 		if i+PacketSize > len(data) {
 			t.Fatal("not enough null packets for the cues")
@@ -290,19 +289,17 @@ func TestLoopSCTE35(t *testing.T) {
 		spliceInsert(12, true, 230_000, 0),
 		spliceInsert(12, false, 260_000, 0),
 	})
-	seg, plan, err := PrepareLoop(context.TODO(), path, 0, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s := plan.SCTE35; s == nil || s.Sections != 4 || s.Kept != 3 || s.EventIDStep != 3 {
-		t.Fatalf("SCTE-35 plan: %+v", plan.SCTE35)
-	}
-	var out bytes.Buffer
 	const wraps = 3
-	if err := LoopToWriter(context.TODO(), seg, &out, wraps); err != nil {
-		t.Fatal(err)
+	loop, b := loopFile(t, path, LoopOptions{}, wraps)
+	if s := loop.Report.Loop.SCTE35; len(s) != 1 || s[0].Sections != 4 || s[0].Kept != 3 || s[0].EventIDStep != 3 {
+		t.Fatalf("SCTE-35 plan: %+v", s)
 	}
-	b := out.Bytes()
+	if n := loop.Report.Lap.SCTE35InjectedPackets; n != 0 {
+		t.Errorf("%d SCTE-35 packets injected, want 0", n)
+	}
+	if n := continuityErrors(b); n != 0 {
+		t.Errorf("%d continuity errors", n)
+	}
 	var a sectionAssembler
 	for i := 0; i < len(b)/PacketSize; i++ {
 		if tsPID(b[i*PacketSize:]) == pid {
@@ -323,8 +320,8 @@ func TestLoopSCTE35(t *testing.T) {
 	}
 	var want []cue
 	for w := int64(0); w < wraps; w++ {
-		want = append(want, cue{10 + 3*uint32(w), 190_000 + w*seg.LoopDurTicks},
-			cue{12 + 3*uint32(w), 230_000 + w*seg.LoopDurTicks}, cue{12 + 3*uint32(w), 260_000 + w*seg.LoopDurTicks})
+		want = append(want, cue{10 + 3*uint32(w), 190_000 + w*loop.LoopDurationTicks()},
+			cue{12 + 3*uint32(w), 230_000 + w*loop.LoopDurationTicks()}, cue{12 + 3*uint32(w), 260_000 + w*loop.LoopDurationTicks()})
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got cues %v, want %v", got, want)

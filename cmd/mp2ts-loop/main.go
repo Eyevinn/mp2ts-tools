@@ -19,82 +19,44 @@ import (
 
 var usg = `Usage of %s:
 
-%s loops a single-program MPEG-2 TS file seamlessly and forever.
+%s makes a perfect endless loop of a single-program MPEG-2 TS, rewriting as
+little as possible.
 
-It scans the input for the longest loop bounded by a video random-access point
-(an IDR picture, a CRA when the stream has no IDR, or an MPEG-2 I picture with a
-sequence header), keeping the video at a constant frame rate and constant GOP
-duration. The loop is a whole number of frame periods (an even frame count at
-59.94 fps). Audio is matched to the average loop duration with no accumulated
-drift, shifted per wrap by less than one audio frame, and PCR is kept perfect
-for a constant-rate TS. The output can be written to a file or sent over UDP.
+The loop runs from one video access point (IDR, CRA, an MPEG-2 I picture with a
+sequence header, or an AVC/HEVC recovery point) to a later one, preferring a loop
+that keeps the picture numbering, a DTS that steps evenly across the seam, a
+whole number of frames, audio from its start, and then the longest. Each lap is
+the source packets of that window: continuity counters, PCR and PES timestamps
+are advanced by the loop duration, and partial PES at the window's edges are
+removed. Audio moves across the seam so each lap plays the audio of its video,
+up to a frame later and never earlier, without drift. Data PES, such as SMPTE
+ST 2038 ANC, move with the picture of their PTS. A constant-rate stream
+gets null packets added or removed just before the seam and an exactly linear
+PCR; a variable-rate stream keeps its source timing. An open-GOP or recovery
+point loop point is marked as an edit (HEVC CRA becomes BLA, MPEG-2 gets
+broken_link, a recovery point SEI gets broken_link_flag). SCTE-35 cues whose
+whole break is inside the loop are kept, with pts_adjustment and event IDs
+advanced each lap.
 
-The input must be a seekable file (stdin is not supported, since the tool reads
-it more than once), it must be constant-rate, and every audio and video PES must
-carry a PTS. The supported codecs are H.264, H.265, and MPEG-2 video and
-AAC, MP2, and AC-3 audio.
+The supported codecs are H.264, H.265 and MPEG-2 video, and AAC (ADTS), MPEG
+audio, AC-3 and E-AC-3, cut on frame boundaries; other audio (LATM, S302M, AC-4)
+is cut on PES boundaries.
 `
-
-// FrameRate is a rational frame rate num/den (frames per second = num/den).
-// den is 1 for integer rates and 1001 for the NTSC-derived fractional rates.
-type FrameRate struct {
-	Num int
-	Den int
-}
-
-func (fr FrameRate) IsZero() bool { return fr.Num == 0 }
-
-func (fr FrameRate) String() string {
-	if fr.Den == 1 {
-		return strconv.Itoa(fr.Num)
-	}
-	return fmt.Sprintf("%d/%d", fr.Num, fr.Den)
-}
 
 // Options holds the parsed command-line configuration.
 type Options struct {
-	Input         string    // input TS file (positional)
-	OutFile       string    // -o output file
-	UDPAddr       string    // -a output UDP address ip:port
-	DurationMS    int       // -d target/cap loop duration in ms (0 = auto longest)
-	ScanOnly      bool      // -scan
-	WritePrepared string    // -write-prepared path for the single-loop segment
-	FPS           FrameRate // -fps frame-rate hint (empty = auto-detect)
-	MaxWraps      int       // -m max wraps (-1 = infinite)
-	Indent        bool      // -indent JSON output
-	Version       bool      // -version
-}
-
-// parseFrameRate parses an -fps value such as "25", "50", "30", "60",
-// "29.97", "59.94", "23.976", or an explicit "num/den".
-func parseFrameRate(s string) (FrameRate, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return FrameRate{}, nil
-	}
-	if num, den, ok := strings.Cut(s, "/"); ok {
-		n, err1 := strconv.Atoi(strings.TrimSpace(num))
-		d, err2 := strconv.Atoi(strings.TrimSpace(den))
-		if err1 != nil || err2 != nil || d == 0 {
-			return FrameRate{}, fmt.Errorf("invalid frame rate %q", s)
-		}
-		return FrameRate{Num: n, Den: d}, nil
-	}
-	// Named/decimal rates. The NTSC-derived rates map to exact num/1001 rationals.
-	switch s {
-	case "23.976", "23.98":
-		return FrameRate{24000, 1001}, nil
-	case "29.97":
-		return FrameRate{30000, 1001}, nil
-	case "59.94":
-		return FrameRate{60000, 1001}, nil
-	case "119.88":
-		return FrameRate{120000, 1001}, nil
-	}
-	if n, err := strconv.Atoi(s); err == nil {
-		return FrameRate{Num: n, Den: 1}, nil
-	}
-	return FrameRate{}, fmt.Errorf("invalid frame rate %q", s)
+	Input         string             // input TS file (positional), "-" for stdin
+	OutFile       string             // -o output file, "-" for stdout
+	UDPAddr       string             // -a output UDP address host:port
+	TTL           int                // -ttl multicast TTL
+	DurationMS    int                // -d longest loop in ms (0 = no limit)
+	ScanOnly      bool               // -scan
+	WritePrepared string             // -write-prepared path for one lap
+	FPS           internal.FrameRate // -fps frame rate (zero = detect)
+	Laps          int                // -m laps (0 = endless)
+	Indent        bool               // -indent JSON output
+	Quiet         bool               // -q
+	Version       bool               // -version
 }
 
 // newFlagSet builds a flag set whose usage prints the program description.
@@ -107,9 +69,10 @@ func newFlagSet() *flag.FlagSet {
 		fmt.Fprintf(os.Stderr, "\nRun as: %s [options] file.ts with options:\n\n", name)
 		fs.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
-		fmt.Fprintf(os.Stderr, "  %s -scan input.ts                      # report loop-point candidates\n", name)
-		fmt.Fprintf(os.Stderr, "  %s -a 239.0.0.1:1234 input.ts          # loop to multicast UDP\n", name)
-		fmt.Fprintf(os.Stderr, "  %s -m 3 -o out.ts input.ts             # write 3 loops to a file\n", name)
+		fmt.Fprintf(os.Stderr, "  %s -scan input.ts                      # the analysis and chosen loop as JSON\n", name)
+		fmt.Fprintf(os.Stderr, "  %s -a 239.0.0.1:1234 input.ts          # endless, over UDP, paced by the output PCR\n", name)
+		fmt.Fprintf(os.Stderr, "  %s -m 3 -o out.ts input.ts             # three laps to a file\n", name)
+		fmt.Fprintf(os.Stderr, "  %s -m 3 -o - input.ts | ffplay -       # three laps to stdout\n", name)
 	}
 	return fs
 }
@@ -119,14 +82,16 @@ func parseOptions(args []string) (Options, error) {
 	var fpsStr string
 
 	fs := newFlagSet()
-	fs.StringVar(&opts.OutFile, "o", "", "output file path (file output)")
-	fs.StringVar(&opts.UDPAddr, "a", "", "output UDP address ip:port (unicast or multicast)")
-	fs.IntVar(&opts.DurationMS, "d", 0, "target/maximum loop duration in ms (0 = auto, longest possible)")
-	fs.BoolVar(&opts.ScanOnly, "scan", false, "scan only: print loop-point analysis as JSON and exit")
-	fs.StringVar(&opts.WritePrepared, "write-prepared", "", "also write the prepared single-loop TS to this file (debug)")
-	fs.StringVar(&fpsStr, "fps", "", "frame-rate hint, e.g. 25, 50, 29.97, 59.94, 23.976, or num/den (default: auto)")
-	fs.IntVar(&opts.MaxWraps, "m", -1, "maximum number of loop wraps (-1 = infinite)")
+	fs.StringVar(&opts.OutFile, "o", "", `output file ("-" for stdout)`)
+	fs.StringVar(&opts.UDPAddr, "a", "", "output UDP address host:port (unicast or multicast), paced by the output PCR")
+	fs.IntVar(&opts.TTL, "ttl", 1, "multicast TTL for -a")
+	fs.IntVar(&opts.DurationMS, "d", 0, "longest loop to consider, in ms (0 = no limit)")
+	fs.BoolVar(&opts.ScanOnly, "scan", false, "print the analysis and chosen loop as JSON and exit")
+	fs.StringVar(&opts.WritePrepared, "write-prepared", "", "also write one lap to this file (debug)")
+	fs.StringVar(&fpsStr, "fps", "", "frame rate when it cannot be detected: 25, 29.97, 30000/1001, ...")
+	fs.IntVar(&opts.Laps, "m", -1, "number of laps (default: 1 for file output only, endless with -a)")
 	fs.BoolVar(&opts.Indent, "indent", false, "indent JSON output")
+	fs.BoolVar(&opts.Quiet, "q", false, "no report on stderr")
 	fs.BoolVar(&opts.Version, "version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -135,49 +100,47 @@ func parseOptions(args []string) (Options, error) {
 	if opts.Version {
 		return opts, nil
 	}
-
-	fr, err := parseFrameRate(fpsStr)
-	if err != nil {
-		return opts, err
+	if fpsStr != "" {
+		fr, err := internal.ParseFrameRate(fpsStr)
+		if err != nil {
+			return opts, err
+		}
+		opts.FPS = fr
 	}
-	opts.FPS = fr
-
+	if opts.TTL < 0 || opts.TTL > 255 {
+		return opts, fmt.Errorf("bad -ttl %d", opts.TTL)
+	}
 	rest := fs.Args()
-	if len(rest) < 1 {
+	if len(rest) != 1 {
 		fs.Usage()
-		return opts, errors.New("missing input TS file")
+		return opts, errors.New("give exactly one input TS file")
 	}
 	opts.Input = rest[0]
+	if !opts.ScanOnly && opts.OutFile == "" && opts.UDPAddr == "" && opts.WritePrepared == "" {
+		return opts, errors.New("no output: use -o (file), -a (UDP), -write-prepared, or -scan")
+	}
+	switch {
+	case opts.Laps == 0 || opts.Laps < -1:
+		return opts, fmt.Errorf("bad -m %d", opts.Laps)
+	case opts.Laps > 0:
+	case opts.UDPAddr != "" && opts.OutFile != "":
+		// A file written alongside an endless UDP output would grow without limit.
+		return opts, errors.New("file output with -a requires -m <laps>")
+	case opts.UDPAddr != "":
+		opts.Laps = 0
+	default:
+		opts.Laps = 1
+	}
 	return opts, nil
 }
 
-// run validates options and dispatches to the scan or loop pipeline.
-func run(ctx context.Context, opts Options) error {
-	if opts.Input == "-" {
-		return errors.New("stdin is not supported; the input must be a seekable file")
-	}
-	if !opts.ScanOnly && opts.OutFile == "" && opts.UDPAddr == "" && opts.WritePrepared == "" {
-		return errors.New("no output selected: use -o (file), -a (UDP), -write-prepared, or -scan")
-	}
-
-	if opts.ScanOnly {
-		return scan(ctx, opts)
-	}
-	return prepareAndLoop(ctx, opts)
-}
-
-// scan runs the analysis pass and reports loop-point candidates and stream
-// statistics as JSON.
-func scan(ctx context.Context, opts Options) error {
-	rep, err := internal.Scan(ctx, opts.Input, opts.FPS.Num, opts.FPS.Den, opts.DurationMS)
-	if err != nil {
-		return err
-	}
+func printJSON(v any, indent bool) error {
 	var b []byte
-	if opts.Indent {
-		b, err = json.MarshalIndent(rep, "", "  ")
+	var err error
+	if indent {
+		b, err = json.MarshalIndent(v, "", "  ")
 	} else {
-		b, err = json.Marshal(rep)
+		b, err = json.Marshal(v)
 	}
 	if err != nil {
 		return err
@@ -186,73 +149,146 @@ func scan(ctx context.Context, opts Options) error {
 	return nil
 }
 
-// prepareAndLoop scans, prepares the in-memory loopable segment, and loops it to
-// the selected output(s).
-func prepareAndLoop(ctx context.Context, opts Options) error {
-	seg, plan, err := internal.PrepareLoop(ctx, opts.Input, opts.FPS.Num, opts.FPS.Den, opts.DurationMS)
-	if err != nil {
+func printSummary(rep *internal.ScanReport) {
+	v, lp, lap := rep.Video, rep.Loop, rep.Lap
+	structure := ""
+	if v.FieldPictures > 0 {
+		structure += fmt.Sprintf(", %d field pictures", v.FieldPictures)
+	}
+	if v.FieldOrder != "" {
+		structure += ", " + v.FieldOrder
+	}
+	if v.PulldownPictures > 0 {
+		structure += fmt.Sprintf(", %d repeating fields or frames", v.PulldownPictures)
+	}
+	fmt.Fprintf(os.Stderr, "video PID %d %s, %d pictures%s; %d audio stream(s), %d data stream(s)\n", v.PID, v.Codec,
+		v.Pictures, structure, len(rep.Audio), len(rep.Data))
+	frames := strconv.FormatFloat(lp.Frames, 'f', -1, 64) + " frames"
+	if lp.Frames != float64(lp.Pictures) {
+		frames += fmt.Sprintf(" in %d pictures", lp.Pictures)
+	}
+	whole := ""
+	if !lp.WholeFrames {
+		whole = ", not whole frames"
+	}
+	fmt.Fprintf(os.Stderr, "loop: %s %.0f ms (%s at %s fps, %d GOPs%s), packets %d..%d\n",
+		lp.AccessPoint, lp.DurationMS, frames, lp.FrameRate, lp.GOPs, whole, lp.StartPacket, lp.EndPacket)
+	rate := "variable"
+	if lp.ConstantRate {
+		rate = "constant"
+	}
+	fmt.Fprintf(os.Stderr, "rate: %s %d bit/s; lap %d packets (%d stripped, %d nulls removed, %d added, "+
+		"%d with an added PCR, %d seam marks)\n", rate, lp.Bitrate, lap.Packets, lap.StrippedPackets,
+		lap.RemovedNulls, lap.AddedNulls, lap.AddedPCRPackets, lap.SeamMarks)
+	for i, a := range lp.Audio {
+		unit := "frame"
+		if rep.Audio[i].CutAt == "pes" {
+			unit = "PES"
+		}
+		fmt.Fprintf(os.Stderr, "audio PID %d %s: %d %ss from %+.1f ms of the loop start, %+.1f ms beyond the loop\n",
+			a.PID, rep.Audio[i].Codec, a.Units, unit, a.SeamOffsetMS, a.ExcessMS)
+	}
+	for _, d := range lp.Data {
+		if d.PlacedByLap {
+			fmt.Fprintf(os.Stderr, "data PID %d: %d PES with the pictures of their PTS\n", d.PID, d.PES)
+		} else {
+			fmt.Fprintf(os.Stderr, "data PID %d: where the source sends it\n", d.PID)
+		}
+	}
+	for _, w := range rep.Warnings {
+		fmt.Fprintln(os.Stderr, "warning:", w)
+	}
+}
+
+// fileOutput opens a buffered file (or stdout) output.
+func fileOutput(path string) (internal.LapOutput, func() error, error) {
+	var w io.WriteCloser = os.Stdout
+	if path != "-" {
+		f, err := os.Create(path)
+		if err != nil {
+			return nil, nil, err
+		}
+		w = f
+	}
+	bw := bufio.NewWriterSize(w, 1000*internal.PacketSize)
+	closeFn := func() error {
+		err := bw.Flush()
+		if w != os.Stdout {
+			if cerr := w.Close(); err == nil {
+				err = cerr
+			}
+		}
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "loop: %s, %d GOPs, %.0f ms, %d packets/wrap\n",
-		plan.LoopPointType, plan.NumGOPs, plan.LoopDurMS, seg.NumPackets)
-	for _, wmsg := range plan.Warnings {
-		fmt.Fprintln(os.Stderr, "warning:", wmsg)
+	return internal.WriterOutput{W: bw}, closeFn, nil
+}
+
+func run(ctx context.Context, opts Options) error {
+	loop, err := internal.PrepareLoop(ctx, opts.Input,
+		internal.LoopOptions{FrameRate: opts.FPS, MaxDurationMS: opts.DurationMS})
+	if opts.ScanOnly && loop != nil {
+		if perr := printJSON(loop.Report, opts.Indent); perr != nil {
+			return perr
+		}
+	}
+	if err != nil || opts.ScanOnly {
+		return err
+	}
+	if !opts.Quiet {
+		printSummary(loop.Report)
 	}
 
 	if opts.WritePrepared != "" {
-		f, err := os.Create(opts.WritePrepared)
+		out, closeFn, err := fileOutput(opts.WritePrepared)
 		if err != nil {
 			return err
 		}
-		bw := bufio.NewWriterSize(f, 1000*internal.PacketSize)
-		if err := internal.LoopToWriter(ctx, seg, bw, 1); err != nil {
-			_ = f.Close()
+		_, err = loop.WriteLaps(ctx, []internal.LapOutput{out}, 1)
+		if cerr := closeFn(); err == nil {
+			err = cerr
+		}
+		if err != nil {
 			return err
 		}
-		if err := bw.Flush(); err != nil {
-			_ = f.Close()
-			return err
+		if !opts.Quiet {
+			fmt.Fprintf(os.Stderr, "wrote one lap to %s\n", opts.WritePrepared)
 		}
-		if err := f.Close(); err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stderr, "wrote prepared single-loop segment to %s\n", opts.WritePrepared)
 	}
-
 	if opts.OutFile == "" && opts.UDPAddr == "" {
-		return nil // -write-prepared only
-	}
-	// A bounded (-m) run is required whenever a file is written, so it does not
-	// grow without limit. UDP-only output may loop forever.
-	if opts.OutFile != "" && opts.MaxWraps <= 0 {
-		return errors.New("file output requires -m <wraps> (a finite number of loops)")
+		return nil
 	}
 
-	var fileW io.Writer
-	var closeFile = func() error { return nil }
+	var outputs []internal.LapOutput
+	closeFile := func() error { return nil }
 	if opts.OutFile != "" {
-		f, err := os.Create(opts.OutFile)
+		out, closeFn, err := fileOutput(opts.OutFile)
 		if err != nil {
 			return err
 		}
-		bw := bufio.NewWriterSize(f, 1000*internal.PacketSize)
-		fileW = bw
-		closeFile = func() error {
-			if ferr := bw.Flush(); ferr != nil {
-				_ = f.Close()
-				return ferr
-			}
-			return f.Close()
-		}
+		outputs, closeFile = append(outputs, out), closeFn
 	}
 	if opts.UDPAddr != "" {
-		bitrate := float64(seg.NumPackets) * internal.PacketSize * 8 / plan.LoopDurMS * 1000
-		fmt.Fprintf(os.Stderr, "streaming to udp://%s at %.0f bps (Ctrl-C to stop)\n", opts.UDPAddr, bitrate)
+		u, err := internal.NewUDPOutput(opts.UDPAddr, opts.TTL)
+		if err != nil {
+			_ = closeFile()
+			return err
+		}
+		defer func() { _ = u.Close() }()
+		outputs = append(outputs, u)
+		if !opts.Quiet {
+			bitrate := float64(loop.LapPackets()) * internal.PacketSize * 8 * 90_000 / float64(loop.LoopDurationTicks())
+			fmt.Fprintf(os.Stderr, "streaming to udp://%s at %.0f bit/s (Ctrl-C to stop)\n", opts.UDPAddr, bitrate)
+		}
 	}
-
-	runErr := internal.LoopToOutputs(ctx, seg, fileW, opts.UDPAddr, opts.MaxWraps)
+	stats, runErr := loop.WriteLaps(ctx, outputs, max(opts.Laps, 0))
 	if cerr := closeFile(); runErr == nil {
 		runErr = cerr
+	}
+	if runErr == nil && !opts.Quiet {
+		fmt.Fprintf(os.Stderr, "%d audio packets moved across seams (%d needed an extra packet), %d audio gaps, "+
+			"%d data packets moved across seams (%d needed an extra packet), %d SCTE-35 sections advanced\n",
+			stats.MovedAudioPackets, stats.InsertedAudioPackets, stats.AudioGaps, stats.MovedDataPackets,
+			stats.InsertedDataPackets, stats.SCTE35Patched)
 	}
 	return runErr
 }
@@ -260,6 +296,9 @@ func prepareAndLoop(ctx context.Context, opts Options) error {
 func main() {
 	opts, err := parseOptions(os.Args[1:])
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(2)
 	}

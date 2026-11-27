@@ -96,61 +96,84 @@ mp2ts-timeshift -offset -9000000 input.ts > output.ts
 
 ### mp2ts-loop
 
-`mp2ts-loop` loops a single-program transport stream seamlessly and forever. It
-scans the input for the longest loop bounded by a video random-access point (an
-IDR picture, a CRA for open-GOP HEVC, or an MPEG-2 I picture with a sequence
-header), keeps the video at a constant frame rate and constant GOP duration,
-matches the audio to the loop duration with no accumulated drift, and regenerates
-a perfect linear PCR for a constant-rate stream. The loop is a whole number of
-frame periods (an even frame count at 59.94 fps, a multiple of four at 23.976),
-so the video timestamps continue exactly across the seam. When the loop is not a
-whole number of audio frames, the audio is shifted per wrap by less than one
-audio frame. For open-GOP HEVC (CRA) streams
-the loop-point picture is marked BLA so the seam decodes cleanly. For open-GOP
-MPEG-2 streams the loop-point GOP is marked `broken_link`; the B-pictures leading
-each seam still predict from the previous wrap's tail, so closed GOPs are needed
-for a pixel-perfect seam. Non-audio/video PIDs such as SMPTE-2038 ANC data are passed
-through and timestamp-shifted per wrap. SCTE-35 cues are kept only when the whole
-break, from CUE-OUT to CUE-IN (or CUE-OUT plus its duration), lies inside the
-loop; a cue sent ahead of the loop start for such a break is moved to the start.
-Every wrap re-sends the kept cues with `pts_adjustment` advanced by the loop
-duration and new event IDs.
+`mp2ts-loop` makes a perfect endless loop of a single-program transport stream, for test
+sources that run for hours: a decoder or a TR 101 290 analyser should not be able to tell
+the seam from the rest of the stream. It does no remux. A lap is the source's own packets
+from one video access point to a later one, and only the fields that must change are
+patched.
 
-In a constant-rate stream every packet keeps its source timing: video and other
-packets stay in their source position, and audio that is multiplexed outside the
-loop's packets (audio usually lags the video it plays with) is moved across the
-loop boundary, to the same place relative to the video. Only just before the
-seam are packets moved, by the difference in decoder buffer level between the
-two loop points. Variable-rate streams, detected from the PCR (signalled
-discontinuities aside), are refused, and a loop never spans a discontinuity. The
-output can be written to a file or
-sent over UDP (unicast or multicast); UDP output is paced at exactly the rate
-the PCR describes, on the monotonic clock.
+The loop starts and ends at video access points of the cleanest class there are two of:
+an IDR (or an MPEG-2 I picture with a sequence header in a closed GOP), an HEVC CRA or
+open MPEG-2 GOP, or an AVC/HEVC recovery point. Among all pairs it prefers a loop that
+keeps the picture numbering at a recovery point, a DTS that steps across the seam as
+elsewhere, fields that keep alternating across the seam, a whole number of frame periods
+(an even frame count at 59.94 fps, a multiple of four at 23.976), audio from the loop
+start, a seam that needs no change of output rate, and then the longest loop. Content whose timestamps do not fit together (a DTS that counts
+pictures, a PCR that does not keep time with the video) is refused with the numbers that
+show why.
 
-The input must be a seekable constant-rate file (stdin is not supported, since
-it is read more than once), and every audio and video PES must carry a PTS. Supported video is H.264, H.265, and MPEG-2; supported audio is AAC,
-MP2, and AC-3. Ultra-low-latency / gradual-decoder-refresh streams (no IDR/CRA) cannot be
-looped and are reported as such.
+Each lap continues the continuity counters in the source's own pattern and advances PCR
+and PES timestamps by the loop duration. A constant-rate stream gets an exactly linear PCR,
+with null packets added or removed just before the seam; a variable-rate stream keeps its
+source timing. Null packets at the seam carry extra PCRs so the PCR stays within 40 ms.
+Every stream loops the same PTS interval as the video: the loop's duration from the earliest
+PTS of its pictures, which comes before the first access point's when pictures decoded after it
+are shown first. Audio packets move across the seam, so each lap plays the audio of its video,
+up to a frame later and never earlier, without drift; the first and last audio PES of a lap are
+cut on frame boundaries (AAC ADTS, MPEG audio, AC-3, E-AC-3), and other audio (LATM, S302M, AC-4)
+on PES boundaries. No lap ends inside an audio PES that a lost packet has damaged. The PES of
+data streams, such as SMPTE ST 2038 ANC, teletext or subtitles,
+move across the seam whole with the picture their PTS is nearest, so each picture keeps its own
+ANC even when the encoder sends it frames ahead. A file that lacks a stream's audio or data at
+an end of the loop, as one trimmed to it, leaves that gap in every lap, with a warning, rather
+than playing what belongs to other pictures; trim a file from the first packet of any stream that
+belongs to the loop's first picture. An open-GOP or recovery-point loop point is marked as an
+edit (HEVC CRA becomes BLA, MPEG-2 gets `broken_link`, a recovery point SEI gets
+`broken_link_flag`).
+SCTE-35 cues are kept only when the whole break, from CUE-OUT to CUE-IN (or CUE-OUT plus
+its duration), lies inside the loop; a cue sent ahead of the loop for such a break is moved
+to the start. Every lap re-sends the kept cues with `pts_adjustment` advanced and new event
+IDs. A data stream whose PES have no PTS, an unreadable header or a PTS that goes back, and
+other PIDs (sections, a second video), keep their packets where the source sends them, with
+their timestamps advanced, and so break at the seam.
+
+Interlaced video is read for how its pictures are shown: field pictures (MPEG-2 field
+pictures, H.264 PAFF, H.265 field coding) are paired into frames, and a loop never starts
+or ends on a second field; the field order of frames (MPEG-2 `top_field_first`, H.264/H.265
+`pic_struct`) and pulldown (`repeat_first_field`, `pic_struct` 5-8) must match at both
+ends, so a 3:2 pulldown loop holds whole cadence cycles. The frame rate is the rate frames
+are shown at: 25 for 1080i25 coded as fields, 29.97 for film with 3:2 pulldown. When both
+fields of the loop's first frame are H.265 CRA, both become BLA.
+
+The scan reports the source's continuity errors, corrupt packets (replaced by null
+packets), and PES that do not start at a TS packet (refused for video and audio). When the
+PAT lists several programs, only the first is looped. An ISDB-T BTS (204-byte packets) is
+refused. The input is read whole (`-` reads stdin, and a named pipe works too). The output can be written to a file or
+stdout, or sent over UDP (unicast or multicast), paced by the output PCR. The design is described in
+[cmd/mp2ts-loop/PLAN.md](cmd/mp2ts-loop/PLAN.md).
 
 **Options:**
-- `-scan` - Scan only: print the loop-point analysis as JSON and exit
-- `-o <file>` - Output file path (requires `-m` so the file is bounded)
-- `-a <ip:port>` - Output UDP address (unicast or multicast); may loop forever
-- `-m N` - Maximum number of loop wraps (`-1` = infinite)
-- `-d N` - Target/maximum loop duration in ms (`0` = auto, longest possible)
-- `-fps R` - Frame-rate hint, e.g. `25`, `50`, `29.97`, `59.94`, or `num/den`
-- `-write-prepared <file>` - Also write the prepared single-loop TS (debug)
+- `-scan` - Print the analysis and chosen loop as JSON and exit
+- `-o <file>` - Output file, `-` for stdout
+- `-a <host:port>` - Output UDP address (unicast or multicast), paced by the output PCR
+- `-ttl N` - Multicast TTL for `-a` (default 1)
+- `-m N` - Number of laps (default: 1 for file output only, endless with `-a`)
+- `-d N` - Longest loop to consider, in ms (`0` = no limit)
+- `-fps R` - Frame rate when it cannot be detected, e.g. `25`, `29.97`, or `num/den`; for
+  field pictures the frame or field rate, for pulldown the shown or the film rate
+- `-write-prepared <file>` - Also write one lap to a file (debug)
 - `-indent` - Indent the `-scan` JSON output
+- `-q` - No report on stderr
 
 **Examples:**
 ```sh
-# Report loop-point candidates and stream analysis
+# The analysis and chosen loop as JSON
 mp2ts-loop -scan input.ts
 
-# Write 3 loops to a file
+# Three laps to a file
 mp2ts-loop -m 3 -o out.ts input.ts
 
-# Loop forever to multicast UDP
+# Endless, to multicast UDP
 mp2ts-loop -a 239.0.0.1:1234 input.ts
 ```
 

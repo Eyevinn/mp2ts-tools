@@ -9,9 +9,9 @@ import (
 )
 
 // TestScanReport golden-tests the `mp2ts-loop -scan` report for the small bundled
-// fixtures: AVC and HEVC IDR loops, a longer AVC stream, a stream with too few
-// loop points to loop, an open-GOP MPEG-2 stream, and a constant-rate AVC+AAC
-// stream (the other AVC and HEVC fixtures are variable-rate, so they are refused).
+// fixtures: variable-rate AVC and HEVC IDR loops, a longer AVC stream with an
+// SCTE-35 cue, a stream with too few access points to loop, an open-GOP MPEG-2
+// stream, and a constant-rate AVC+AAC stream.
 // Regenerate with: go test ./internal/... -run TestScanReport -update
 func TestScanReport(t *testing.T) {
 	cases := []struct {
@@ -28,9 +28,10 @@ func TestScanReport(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			rep, err := Scan(context.TODO(), c.file, 0, 0, 0)
-			require.NoError(t, err)
-			b, err := json.MarshalIndent(rep, "", "  ")
+			l, err := PrepareLoop(context.TODO(), c.file, LoopOptions{})
+			require.NotNil(t, l)
+			require.Equal(t, err == nil, l.Report.Error == "")
+			b, err := json.MarshalIndent(l.Report, "", "  ")
 			require.NoError(t, err)
 			compareUpdateGolden(t, string(b)+"\n", c.golden, *update)
 		})
