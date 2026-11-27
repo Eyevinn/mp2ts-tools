@@ -683,6 +683,11 @@ func buildSegment(data []byte, idx *streamIndex, plan *loopPlan) (*loopSegment, 
 	seg.lapPackets = seg.packetCount()
 	if plan.constantRate {
 		seg.lapPackets = plan.lapPackets
+		if excess := seg.packetCount() - plan.lapPackets; excess > 0 {
+			seg.warnings = append(seg.warnings, fmt.Sprintf("the lap has %d packets more than it holds at the source "+
+				"rate and too few null packets to drop; the output rate is %.3f%% higher",
+				excess, 100*float64(excess)/float64(plan.lapPackets)))
+		}
 	}
 
 	if idx.pictures[plan.startPicture].info.accessPoint != apClosedGOP {

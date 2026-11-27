@@ -48,7 +48,6 @@
     "bitrate": 242506,
     "rateDeviationMs": 1651.044,
     "windowMs": 79000,
-    "packetsPerLap": 12738,
     "audio": [
       {
         "pid": 257,

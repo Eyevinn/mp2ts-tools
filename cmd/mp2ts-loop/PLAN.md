@@ -28,18 +28,26 @@ later one, and only the fields that have to change are patched.
    PID), audio (MPEG audio, ADTS, AC-3/E-AC-3 cut on frames; LATM, S302M, AC-4 on PES), data
    (any other PES stream), SCTE-35 and pass-through PIDs (sections, a second video). Per picture:
    PTS/DTS (unwrapped), access point class, parameter sets, picture numbering and how it is shown
-   (`loop_es.go`, see Interlace). Per audio PES: its frames and where its bytes lie. Per data PES:
+   (`loop_es.go`, see Interlace). Per audio PES: its frames and where its bytes lie. A PES whose
+   frames cannot be read, as after a lost packet, is one frame that lasts until the next PES, so
+   no lap ends inside it; when that is most PES (frames that straddle PES), the whole stream is
+   cut on PES boundaries. Per data PES:
    its PTS and where its bytes lie, unless a PES of the stream has no PTS, a header that cannot be
    read or a PTS earlier than the one before, which keeps the stream where it is sent. Also PCR
    samples, discontinuities, null packet counts, payload units per PID, continuity errors (a
-   duplicate packet is allowed), and PES that do not start a packet's payload (refused on video
-   and audio, warned on others). A BTS (204-byte packets) is refused.
+   duplicate packet is allowed, and its payload is read once), and PES that do not start a
+   packet's payload (refused on video and audio, warned on others). A BTS (204-byte packets) is
+   refused.
 2. **Choose** (`loop_plan.go`): the PCR as stretches between discontinuities, each constant-rate
    when within 1 ms of a straight line. The input is refused when the median DTS step gives more
    than 300 pictures a second, or the PCR and video PTS part by more than 1 s plus a tenth of a
    stretch. Access points of the cleanest class with two (closed GOP, open GOP, recovery point),
-   never a second field, are paired longest first, ranking: recovery-point numbering kept, DTS
-   step even across the seam (within half a picture), the same field order and pulldown phase at
+   with those of a cleaner class among them, never a second field, are paired longest first. A
+   loop is of the class of its first picture, where every lap starts: an IDR among recovery
+   points starts a closed-GOP loop, whatever follows the loop. Ranking: picture numbering kept
+   (always by a loop that starts on an IDR or IRAP, by one that starts on a recovery point when
+   the picture after the loop has its numbers), DTS step even across the seam (within half a
+   picture), the same field order and pulldown phase at
    both ends, whole frame periods, audio from the loop start, a seam needing no rate change,
    longest. A pair is skipped when its window crosses a discontinuity, is sent far off the
    time it lasts, shows a picture after its end, or would jump the DTS by more than 1 s. At most
@@ -69,7 +77,11 @@ later one, and only the fields that have to change are patched.
    at the end of the previous one, into free packets, or inserted (a constant-rate lap then drops
    a free null packet). Continuity counters keep the source pattern with one offset per PID and
    lap (audio and placed data are counted afresh); PCR, OPCR and PES timestamps advance by the loop
-   duration. A bounded run ends with the audio and data the next lap would have carried.
+   duration. A bounded run ends with the audio and data the next lap would have carried. The
+   output is made in chunks of 3584 packets (512 datagrams) by a goroutine that stays two chunks ahead
+   of the outputs (`WriteLaps` in `loop.go`), so a paced output does not wait at a seam while the
+   next lap's audio and data are placed. When the run is stopped, a paced output stops at once
+   and a file at the end of the lap.
 5. **Outputs** (`loop_send.go`): a writer (file or stdout) as fast as it goes, and UDP, 7 packets
    per datagram, each sent when its last packet is due by the output PCR on the monotonic clock.
 
@@ -141,5 +153,5 @@ Open:
   and breaks at every seam.
 - A recovery point SEI is read with the rest of its SEI NAL unit; a message there that does not
   parse hides it. `broken_link_flag` is not set when an emulation prevention byte comes before it.
-- Memory: the input is mapped, and a lap is built in memory from a copy of the loop's window, plus
-  per-packet scan tables (about 4 bytes a packet). `-d` bounds the loop.
+- Memory: the input is mapped (read when it is a pipe), and the laps are made from one copy of
+  the loop's window, plus per-packet scan tables (about 4 bytes a packet). `-d` bounds the loop.

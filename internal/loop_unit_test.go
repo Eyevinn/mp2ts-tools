@@ -495,6 +495,60 @@ func TestRecoveryPointNumbering(t *testing.T) {
 	}
 }
 
+// TestLoopClassIsItsStart checks that a loop is of the class of the picture it
+// starts on: an IDR among recovery points or CRAs starts the numbering anew and
+// needs no seam mark, whatever picture follows the loop.
+func TestLoopClassIsItsStart(t *testing.T) {
+	// No two recovery points share their numbers, but picture 50 is an IDR.
+	pics := picturesEvery(201, 10, apRecoveryPoint)
+	for i := range pics {
+		pics[i].info.numbering = &pictureNumbering{frameNum: uint32(i) % 256, orderLSB: 2 * uint32(i) % 64}
+	}
+	pics[50].info.accessPoint = apClosedGOP
+	plan, err := chooseLoop(indexOf(pics), loopOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.accessPoint != apClosedGOP || plan.startPicture != 50 || plan.endPicture != 200 ||
+		anyHas(plan.warnings, "IDR") || anyHas(plan.warnings, "numbering") {
+		t.Errorf("%v loop of pictures %d to %d, warnings %v", plan.accessPoint, plan.startPicture, plan.endPicture, plan.warnings)
+	}
+	// Without it the loop is between recovery points, with a warning.
+	pics[50].info.accessPoint = apRecoveryPoint
+	plan, err = chooseLoop(indexOf(pics), loopOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.accessPoint != apRecoveryPoint || plan.startPicture != 0 || !anyHas(plan.warnings, "the stream has no IDR") {
+		t.Errorf("%v loop from picture %d, warnings %v", plan.accessPoint, plan.startPicture, plan.warnings)
+	}
+
+	// One IDR, then CRAs: the longest loop starts on the IDR.
+	pics = picturesEvery(101, 10, apOpenGOP)
+	pics[0].info.accessPoint = apClosedGOP
+	idx := indexOf(pics)
+	idx.videoCodec = CODEC_HEVC
+	plan, err = chooseLoop(idx, loopOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.accessPoint != apClosedGOP || plan.startPicture != 0 || plan.endPicture != 100 || anyHas(plan.warnings, "open-GOP") {
+		t.Errorf("%v loop of pictures %d to %d, warnings %v", plan.accessPoint, plan.startPicture, plan.endPicture, plan.warnings)
+	}
+}
+
+// TestLimitShorterThanAnyLoop checks the error for a -d limit that no two
+// access points are within.
+func TestLimitShorterThanAnyLoop(t *testing.T) {
+	_, err := chooseLoop(indexOf(picturesEvery(101, 25, apClosedGOP)), loopOptions{maxDuration: 100 * 90})
+	if err == nil || !strings.Contains(err.Error(), "the limit of 100 ms: the closest video access points are 1000 ms apart") {
+		t.Errorf("%v", err)
+	}
+	if _, err := chooseLoop(indexOf(picturesEvery(101, 25, apClosedGOP)), loopOptions{maxDuration: 1000 * 90}); err != nil {
+		t.Error(err)
+	}
+}
+
 // TestDTSJumpAtSeam checks that a loop whose DTS would jump at the seam is
 // avoided or refused. PTS keeps time with the PCR; PTS - DTS grows each picture.
 func TestDTSJumpAtSeam(t *testing.T) {
@@ -1000,6 +1054,29 @@ func TestSCTE35LegacyCommandLength(t *testing.T) {
 	}
 	if len(ids) != 2 || ids[0] != 100 || ids[1] != 200 {
 		t.Errorf("event IDs %v, want [100 200]", ids)
+	}
+}
+
+// TestUDPOutputIPv6 checks that an IPv6 destination can be opened: the
+// multicast TTL of IPv4 is no option of an IPv6 socket.
+func TestUDPOutputIPv6(t *testing.T) {
+	rx, err := net.ListenPacket("udp", "[::1]:0")
+	if err != nil {
+		t.Skip("no IPv6 loopback:", err)
+	}
+	defer func() { _ = rx.Close() }()
+	u, err := NewUDPOutput(rx.LocalAddr().String(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = u.Close() }()
+	packets := make([]byte, tsPacketsPerDatagram*PacketSize)
+	if err := u.Write(context.Background(), packets, func(int) int64 { return 0 }); err != nil {
+		t.Fatal(err)
+	}
+	_ = rx.SetReadDeadline(time.Now().Add(time.Second))
+	if n, _, err := rx.ReadFrom(make([]byte, 2000)); err != nil || n != len(packets) {
+		t.Errorf("received %d bytes of %d: %v", n, len(packets), err)
 	}
 }
 

@@ -121,7 +121,8 @@ PTS of its pictures, which comes before the first access point's when pictures d
 are shown first. Audio packets move across the seam, so each lap plays the audio of its video,
 up to a frame later and never earlier, without drift; the first and last audio PES of a lap are
 cut on frame boundaries (AAC ADTS, MPEG audio, AC-3, E-AC-3), and other audio (LATM, S302M, AC-4)
-on PES boundaries. The PES of data streams, such as SMPTE ST 2038 ANC, teletext or subtitles,
+on PES boundaries. No lap ends inside an audio PES that a lost packet has damaged. The PES of
+data streams, such as SMPTE ST 2038 ANC, teletext or subtitles,
 move across the seam whole with the picture their PTS is nearest, so each picture keeps its own
 ANC even when the encoder sends it frames ahead. A file that lacks a stream's audio or data at
 an end of the loop, as one trimmed to it, leaves that gap in every lap, with a warning, rather
@@ -147,7 +148,7 @@ fields of the loop's first frame are H.265 CRA, both become BLA.
 The scan reports the source's continuity errors, corrupt packets (replaced by null
 packets), and PES that do not start at a TS packet (refused for video and audio). When the
 PAT lists several programs, only the first is looped. An ISDB-T BTS (204-byte packets) is
-refused. The input is read whole (`-` reads stdin). The output can be written to a file or
+refused. The input is read whole (`-` reads stdin, and a named pipe works too). The output can be written to a file or
 stdout, or sent over UDP (unicast or multicast), paced by the output PCR. The design is described in
 [cmd/mp2ts-loop/PLAN.md](cmd/mp2ts-loop/PLAN.md).
 

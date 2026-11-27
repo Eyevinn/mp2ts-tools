@@ -1,8 +1,10 @@
 package internal
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -968,5 +970,190 @@ func TestLoopLeadingPictures(t *testing.T) {
 				t.Fatalf("audio PID %d: frame from %d shifted %d", r.pid, src, shift)
 			}
 		}
+	}
+}
+
+// audioContinuation returns the first packet from packet from on that continues
+// a PES of the test stream's first audio.
+func audioContinuation(t *testing.T, stream []byte, from int) int {
+	t.Helper()
+	for i := from; i < len(stream)/PacketSize; i++ {
+		if p := packetAt(stream, i); tsPID(p) == tAudioPID && tsHasPayload(p) && !tsPUSI(p) {
+			return i
+		}
+	}
+	t.Fatal("no audio packet")
+	return -1
+}
+
+// TestLostAudioPacket checks that an audio PES that lost a packet is one frame
+// no lap ends inside, and that the rest of the audio is still cut at frames:
+// outside the loop it changes nothing, inside it comes back every lap.
+func TestLostAudioPacket(t *testing.T) {
+	source := buildStream(t, streamOptions{seconds: 6})
+	opts := LoopOptions{MaxDurationMS: 2000}
+	clean, cleanOut, _ := loopData(t, source, opts, 3)
+	lose := func(from int) []byte {
+		damaged := append([]byte(nil), source...)
+		writeNullPacket(packetAt(damaged, audioContinuation(t, damaged, from)))
+		return damaged
+	}
+
+	outside := lose(clean.Report.Loop.EndPacket + 2000)
+	idx, err := scanData(t, outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := idx.audio[0]
+	var damaged []audioPES
+	for _, p := range a.pes {
+		if p.damaged {
+			damaged = append(damaged, p)
+		}
+	}
+	if !a.frameLevel || len(damaged) != 1 || !anyHas(idx.warnings, "the frames of 1 of") {
+		t.Fatalf("frame level %v, %d damaged PES, warnings %v", a.frameLevel, len(damaged), idx.warnings)
+	}
+	// It lasts until the next PES, three frames on.
+	if f := a.frames[damaged[0].firstFrame]; damaged[0].frameCount != 1 ||
+		f.duration != tAudioFramesPerPES*tAudioFrameTicks*a.timeScale || f.start != damaged[0].pts*a.timeScale {
+		t.Errorf("damaged PES %+v with frame %+v", damaged[0], f)
+	}
+	l, out, _ := loopData(t, outside, opts, 3)
+	if l.Report.Audio[0].CutAt != "frame" || anyHas(l.Report.Warnings, "come back every lap") {
+		t.Errorf("audio %+v, warnings %v", l.Report.Audio[0], l.Report.Warnings)
+	}
+	if !bytes.Equal(out, cleanOut) {
+		t.Error("a packet lost outside the loop changes the laps")
+	}
+
+	inside := lose((clean.Report.Loop.StartPacket + clean.Report.Loop.EndPacket) / 2)
+	l, out, _ = loopData(t, inside, opts, 3)
+	if l.Report.Audio[0].CutAt != "frame" || !anyHas(l.Report.Warnings, "audio PID 257: 1 PES whose frames cannot be read") ||
+		l.Report.Loop.Audio[0].SeamOffsetMS != clean.Report.Loop.Audio[0].SeamOffsetMS {
+		t.Errorf("audio %+v, in the loop %+v, warnings %v", l.Report.Audio[0], l.Report.Loop.Audio[0], l.Report.Warnings)
+	}
+	if n := continuityErrors(out); n != 0 {
+		t.Errorf("%d continuity errors", n)
+	}
+}
+
+// TestUnalignedAudio checks that audio whose frames mostly cannot be read, as
+// when they straddle PES, is cut at PES boundaries.
+func TestUnalignedAudio(t *testing.T) {
+	source := buildStream(t, streamOptions{seconds: 6})
+	// Each PES of the first audio loses its first continuation packet.
+	for i := 0; i < len(source)/PacketSize; i++ {
+		if p := packetAt(source, i); tsPID(p) == tAudioPID && tsPUSI(p) {
+			writeNullPacket(packetAt(source, audioContinuation(t, source, i)))
+		}
+	}
+	l, _, _ := loopData(t, source, LoopOptions{MaxDurationMS: 2000}, 1)
+	if l.Report.Audio[0].CutAt != "pes" || l.Report.Audio[1].CutAt != "frame" ||
+		!anyHas(l.Report.Warnings, "laps end on PES boundaries") {
+		t.Errorf("audio %+v, warnings %v", l.Report.Audio, l.Report.Warnings)
+	}
+}
+
+// TestDuplicateAudioPacket checks that an audio packet sent twice, which is
+// allowed, is not two packets of payload in the laps.
+func TestDuplicateAudioPacket(t *testing.T) {
+	source := buildStream(t, streamOptions{seconds: 6})
+	opts := LoopOptions{MaxDurationMS: 2000}
+	clean, _, _ := loopData(t, source, opts, 1)
+	// The copy takes a null packet before the PID's next packet.
+	repeated := -1
+	for i := (clean.Report.Loop.StartPacket + clean.Report.Loop.EndPacket) / 2; repeated < 0; i++ {
+		i = audioContinuation(t, source, i)
+		for j := i + 1; tsPID(packetAt(source, j)) != tAudioPID; j++ {
+			if tsPID(packetAt(source, j)) == nullPID {
+				copy(packetAt(source, j), packetAt(source, i))
+				repeated = j
+				break
+			}
+		}
+	}
+	if repeated >= clean.Report.Loop.EndPacket {
+		t.Fatalf("the repeated packet %d is outside the loop", repeated)
+	}
+	l, out, _ := loopData(t, source, opts, 3)
+	if len(l.Report.ContinuityErrors) != 0 || l.Report.Audio[0].CutAt != "frame" || len(l.Report.Warnings) != 0 {
+		t.Errorf("continuity errors %v, audio %+v, warnings %v", l.Report.ContinuityErrors, l.Report.Audio[0], l.Report.Warnings)
+	}
+	if n := continuityErrors(out); n != 0 {
+		t.Errorf("%d continuity errors", n)
+	}
+	for _, r := range collectPES(out) {
+		if r.pid != tAudioPID {
+			continue
+		}
+		if len(r.payload) == 0 || len(r.payload)%tAudioFrameSize != 0 {
+			t.Fatalf("audio PES at packet %d has %d bytes, not whole frames of %d", r.packet, len(r.payload), tAudioFrameSize)
+		}
+		for off := 0; off < len(r.payload); off += tAudioFrameSize {
+			if !bytes.Equal(r.payload[off:off+2], []byte{0xff, 0xf1}) {
+				t.Fatalf("audio PES at packet %d has no frame at byte %d", r.packet, off)
+			}
+		}
+	}
+}
+
+// lapEndOutput ends the run once it has taken a number of packets.
+type lapEndOutput struct {
+	out    bytes.Buffer
+	cancel context.CancelFunc
+	after  int
+}
+
+func (o *lapEndOutput) Write(_ context.Context, packets []byte, _ func(int) int64) error {
+	o.out.Write(packets)
+	if o.out.Len() >= o.after*PacketSize {
+		o.cancel()
+	}
+	return nil
+}
+
+func (o *lapEndOutput) Flush() error { return nil }
+
+type failingOutput struct{ err error }
+
+func (o failingOutput) Write(context.Context, []byte, func(int) int64) error { return o.err }
+func (o failingOutput) Flush() error                                         { return nil }
+
+// TestWriteLapsInChunks loops a lap of several chunks: an endless run that is
+// stopped ends an unpaced output at the end of a lap, with the packets of a
+// bounded run, and an output that fails ends the run with its error.
+func TestWriteLapsInChunks(t *testing.T) {
+	source := buildStream(t, streamOptions{seconds: 12})
+	l, bounded, _ := loopData(t, source, LoopOptions{}, 4)
+	lapPackets := l.seg.lapPackets
+	if lapPackets < 2*lapChunkPackets || l.seg.packetCount() != lapPackets {
+		t.Fatalf("a lap of %d packets (%d at the source rate), chunks of %d", l.seg.packetCount(), lapPackets, lapChunkPackets)
+	}
+	if n := continuityErrors(bounded); n != 0 {
+		t.Errorf("%d continuity errors", n)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	o := &lapEndOutput{cancel: cancel, after: lapPackets + lapPackets/2}
+	if _, err := l.WriteLaps(ctx, []LapOutput{o}, 0); err != nil {
+		t.Fatal(err)
+	}
+	out := o.out.Bytes()
+	preamble := 0
+	for tsPID(packetAt(out, preamble)) != tVideoPID {
+		preamble++
+	}
+	if got := len(out)/PacketSize - preamble; got != 2*lapPackets {
+		t.Errorf("stopped in the second lap: %d packets after the preamble, want two laps of %d", got, lapPackets)
+	}
+	if !bytes.Equal(out, bounded[:len(out)]) {
+		t.Error("the laps of the stopped run differ from those of a bounded run")
+	}
+
+	failure := errors.New("no room")
+	if _, err := l.WriteLaps(context.Background(), []LapOutput{failingOutput{failure}}, 0); !errors.Is(err, failure) {
+		t.Errorf("error %v, want the output's", err)
 	}
 }

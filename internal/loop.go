@@ -106,7 +106,6 @@ type LoopReport struct {
 	Bitrate         int64             `json:"bitrate"`
 	RateDeviationMS float64           `json:"rateDeviationMs"`
 	WindowMS        float64           `json:"windowMs"`
-	PacketsPerLap   int               `json:"packetsPerLap"`
 	Audio           []LoopAudioReport `json:"audio"`
 	Data            []LoopDataReport  `json:"data"`
 	SCTE35          []*LoopSCTE35     `json:"scte35,omitempty"`
@@ -244,7 +243,6 @@ func describeLoop(rep *ScanReport, idx *streamIndex, plan *loopPlan, seg *loopSe
 		Bitrate:         int64(math.Round(plan.bitrate)),
 		RateDeviationMS: round3(float64(plan.deviation) / 27_000),
 		WindowMS:        round3(float64(plan.windowTime) / 27_000),
-		PacketsPerLap:   plan.outputPackets,
 		Audio:           []LoopAudioReport{},
 		Data:            []LoopDataReport{},
 		SCTE35:          plan.scte35,
@@ -351,7 +349,8 @@ func readInput(path string) ([]byte, func(), error) {
 // LapOutput takes the packets of the laps as they are written.
 type LapOutput interface {
 	// Write takes packets, 188 bytes each; due(i) is when packet i is due, in
-	// 27 MHz ticks from the start of the output.
+	// 27 MHz ticks from the start of the output. Both are valid only until Write
+	// returns.
 	Write(ctx context.Context, packets []byte, due func(i int) int64) error
 	Flush() error
 }
@@ -366,29 +365,87 @@ func (o WriterOutput) Write(_ context.Context, packets []byte, _ func(int) int64
 
 func (o WriterOutput) Flush() error { return nil }
 
+// lapChunksAhead is how many chunks of the output are made before they are
+// due: a paced output sends them while the next ones are made, so it is not
+// held up at a seam while the next lap's audio and data are placed.
+const lapChunksAhead = 2
+
+var errOutputStopped = errors.New("the output has stopped")
+
 // WriteLaps writes the preamble (PAT and PMT, then audio and data the first
 // lap's video is sent with), laps laps (0: until ctx ends), and for a bounded
 // run the audio and data of the last lap that the next lap would carry, to every
-// output in turn.
+// output in turn. When ctx ends, a paced output stops at once and the others at
+// the end of the lap.
 func (l *Loop) WriteLaps(ctx context.Context, outputs []LapOutput, laps int) (LapStatistics, error) {
 	if l.seg == nil {
 		return LapStatistics{}, errors.New("no loop to write")
 	}
-	w := newLapWriter(l.seg, laps)
-	emit := func(packets []byte) error {
-		for _, o := range outputs {
-			if err := o.Write(ctx, packets, w.sendTime); err != nil {
-				return err
+	// The laps are made a few thousand packets at a time, ahead of the outputs.
+	chunks := make(chan *lapChunk, lapChunksAhead)
+	free := make(chan *lapChunk, lapChunksAhead+2)
+	stop := make(chan struct{})
+	go func() {
+		defer close(chunks)
+		w := newLapWriter(l.seg, laps, func(c *lapChunk) (*lapChunk, error) {
+			select {
+			case chunks <- c:
+			case <-stop:
+				return nil, errOutputStopped
+			}
+			select {
+			case c = <-free:
+				c.packets, c.times = c.packets[:0], c.times[:0]
+				return c, nil
+			default:
+				return newLapChunk(), nil
+			}
+		})
+		w.writePreamble()
+		var err error
+		for lap := 0; err == nil && (laps <= 0 || lap < laps); lap++ {
+			err = w.writeLap()
+		}
+		if err == nil {
+			_ = w.writeEnding()
+		}
+	}()
+
+	var stats LapStatistics
+	var err, ctxErr error
+	active := append([]LapOutput(nil), outputs...)
+	stopped, lapStart := false, true
+	for c := range chunks {
+		if !stopped && (err != nil || len(active) == 0 || (lapStart && ctx.Err() != nil)) {
+			stopped = true
+			close(stop)
+		}
+		if stopped {
+			continue // until the chunks already made are taken
+		}
+		lapStart, stats = c.lapEnd, c.stats
+		for k := 0; k < len(active) && err == nil; k++ {
+			werr := active[k].Write(ctx, c.packets, c.due)
+			switch {
+			case werr == nil:
+			case ctx.Err() != nil && errors.Is(werr, ctx.Err()):
+				// The output stops; the others end with the lap.
+				ctxErr = werr
+				active = append(active[:k], active[k+1:]...)
+				k--
+			default:
+				err = werr
 			}
 		}
-		return nil
+		if cap(c.packets) >= lapChunkPackets*PacketSize {
+			select {
+			case free <- c:
+			default:
+			}
+		}
 	}
-	err := emit(w.writePreamble())
-	for lap := 0; err == nil && (laps <= 0 || lap < laps) && ctx.Err() == nil; lap++ {
-		err = emit(w.writeLap())
-	}
-	if err == nil && w.lap > 0 && ctx.Err() == nil {
-		err = emit(w.writeEnding())
+	if err == nil {
+		err = ctxErr
 	}
 	for _, o := range outputs {
 		if ferr := o.Flush(); err == nil {
@@ -398,5 +455,5 @@ func (l *Loop) WriteLaps(ctx context.Context, outputs []LapOutput, laps int) (La
 	if errors.Is(err, context.Canceled) {
 		err = nil
 	}
-	return w.stats, err
+	return stats, err
 }

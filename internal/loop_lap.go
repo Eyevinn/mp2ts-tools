@@ -83,7 +83,31 @@ const (
 	freePacket    = -1
 	droppedPacket = -2
 	unplaced      = math.MinInt
+	// lapChunkPackets is how many packets the output is made of at a time,
+	// whole datagrams.
+	lapChunkPackets = 512 * tsPacketsPerDatagram
 )
+
+// lapChunk is a run of the output's packets.
+type lapChunk struct {
+	packets []byte
+	times   []int64 // per packet: when it is due, 27 MHz from the start of the output
+	lapEnd  bool    // its last packet ends a lap, or the output
+	stats   LapStatistics
+}
+
+func newLapChunk() *lapChunk {
+	return &lapChunk{packets: make([]byte, 0, lapChunkPackets*PacketSize), times: make([]int64, 0, lapChunkPackets)}
+}
+
+func (c *lapChunk) due(i int) int64 { return c.times[i] }
+
+// add appends a copy of packet p, due at t, and returns the copy.
+func (c *lapChunk) add(p []byte, t int64) []byte {
+	c.packets = append(c.packets, p...)
+	c.times = append(c.times, t)
+	return c.packets[len(c.packets)-PacketSize:]
+}
 
 // lapWriter writes the laps of a segment, patching each packet as little as it
 // can: continuity counters continue across laps, PCR and PES timestamps advance
@@ -91,9 +115,13 @@ const (
 // on the frame the controller picks, and SCTE-35 pts_adjustment advances with
 // the video and its event IDs by the plan's step. Audio and data the source
 // sends after the window are sent at the start of the next lap, and those it
-// sends before the window at the end of the previous one.
+// sends before the window at the end of the previous one. The output is made
+// in chunks: each goes to sink when it is full or ends a lap, and sink returns
+// the chunk to fill next.
 type lapWriter struct {
 	seg         *loopSegment
+	sink        func(*lapChunk) (*lapChunk, error)
+	chunk       *lapChunk
 	laps        int // laps a bounded run writes, so the last leaves out the next lap's audio and data; 0: endless
 	lap         int
 	controllers []audioLapController
@@ -104,14 +132,13 @@ type lapWriter struct {
 	continuity    [numPIDs]lapContinuity
 	placedPackets []placedPacket
 	placedBytes   []byte
-	owner         []int   // per lap packet: the placed packet in it, or freePacket/droppedPacket
-	times         []int64 // 27 MHz from timeBase, per packet of the last write
-	timeBase      int64
+	owner         []int // per lap packet: the placed packet in it, or freePacket/droppedPacket
 	stats         LapStatistics
 }
 
-func newLapWriter(seg *loopSegment, laps int) *lapWriter {
-	w := &lapWriter{seg: seg, laps: laps, placedPID: make(map[int]bool), scte35PID: make(map[int]bool)}
+func newLapWriter(seg *loopSegment, laps int, sink func(*lapChunk) (*lapChunk, error)) *lapWriter {
+	w := &lapWriter{seg: seg, laps: laps, sink: sink, chunk: newLapChunk(),
+		placedPID: make(map[int]bool), scte35PID: make(map[int]bool)}
 	for s, a := range seg.audio {
 		w.placedPID[a.pid] = true
 		w.controllers = append(w.controllers, audioLapController{frameStarts: a.frameStarts,
@@ -129,16 +156,23 @@ func newLapWriter(seg *loopSegment, laps int) *lapWriter {
 	return w
 }
 
-// sendTime returns when packet i of the last write is due, 27 MHz from the
-// start of lap 0.
-func (w *lapWriter) sendTime(i int) int64 { return w.timeBase + w.times[i] }
+// flush passes the chunk on, unless it is empty.
+func (w *lapWriter) flush(lapEnd bool) error {
+	if len(w.chunk.packets) == 0 {
+		return nil
+	}
+	w.chunk.lapEnd, w.chunk.stats = lapEnd, w.stats
+	next, err := w.sink(w.chunk)
+	w.chunk = next
+	return err
+}
 
-// writePreamble returns the PAT and PMT, then the first lap's audio and data
-// that the source sends before the window.
-func (w *lapWriter) writePreamble() []byte {
-	out := append([]byte(nil), w.seg.preamble...)
-	for i := 0; i < len(out)/PacketSize; i++ {
-		p := packetAt(out, i)
+// writePreamble writes the PAT and PMT, then the first lap's audio and data
+// that the source sends before the window. They go out with the start of the
+// first lap.
+func (w *lapWriter) writePreamble() {
+	for i := 0; i < len(w.seg.preamble)/PacketSize; i++ {
+		p := w.chunk.add(packetAt(w.seg.preamble, i), 0)
 		c := &w.continuity[tsPID(p)]
 		cc := tsCC(p)
 		if c.started {
@@ -155,17 +189,13 @@ func (w *lapWriter) writePreamble() []byte {
 		w.collectData(s, 0, -1)
 	}
 	for _, pp := range w.placedPackets {
-		out = append(out, w.placedBytes[pp.byteAt:pp.byteAt+PacketSize]...)
-		w.patchPacket(packetAt(out, len(out)/PacketSize-1), 0)
+		w.patchPacket(w.chunk.add(w.placedBytes[pp.byteAt:pp.byteAt+PacketSize], 0), 0)
 	}
 	w.countMoved()
-	w.timeBase = 0
-	w.times = make([]int64, len(out)/PacketSize)
-	return out
 }
 
-// writeLap returns the next lap.
-func (w *lapWriter) writeLap() []byte {
+// writeLap writes the next lap.
+func (w *lapWriter) writeLap() error {
 	w.placedPackets, w.placedBytes = w.placedPackets[:0], w.placedBytes[:0]
 	nextLapFollows := w.laps <= 0 || w.lap+1 < w.laps
 	for s := range w.audioLaps {
@@ -229,23 +259,32 @@ func (w *lapWriter) writeLap() []byte {
 		}
 	}
 
-	out := make([]byte, 0, count*PacketSize)
-	w.times = w.times[:0]
 	lapTime := w.seg.duration * pcrPerTick
+	lapStart := int64(w.lap) * lapTime
+	var err error
+	written := 0
 	appendPacket := func(p []byte, slot int) {
-		out = append(out, p...)
-		if w.seg.constantRate {
-			w.times = append(w.times, evenTime(len(w.times), count, lapTime))
-		} else {
-			w.times = append(w.times, w.seg.sendTimes[min(slot, baseCount-1)])
+		// A full chunk goes before the next packet, so that the lap's last packet
+		// is in the chunk that ends the lap.
+		if len(w.chunk.packets) >= lapChunkPackets*PacketSize {
+			err = w.flush(false)
 		}
+		if err != nil {
+			return
+		}
+		t := w.seg.sendTimes[min(slot, baseCount-1)]
+		if w.seg.constantRate {
+			t = evenTime(written, count, lapTime)
+		}
+		written++
+		w.patchPacket(w.chunk.add(p, lapStart+t), t)
 	}
 	placed := func(i int) []byte {
 		at := w.placedPackets[i].byteAt
 		return w.placedBytes[at : at+PacketSize]
 	}
 	next := 0
-	for slot := 0; slot <= baseCount; slot++ {
+	for slot := 0; slot <= baseCount && err == nil; slot++ {
 		for ; next < len(inserted) && w.placedPackets[inserted[next]].position == 2*slot-1; next++ {
 			appendPacket(placed(inserted[next]), slot)
 		}
@@ -262,23 +301,20 @@ func (w *lapWriter) writeLap() []byte {
 		}
 	}
 
-	w.timeBase = int64(w.lap) * lapTime
-	for i := range w.times {
-		w.patchPacket(packetAt(out, i), w.times[i])
+	if err != nil {
+		return err
 	}
 	for s := range w.audioLaps {
 		laps := &w.audioLaps[s]
 		laps[0], laps[1], laps[2] = laps[1], laps[2], w.nextAudioLap(s, w.lap+2)
 	}
 	w.lap++
-	return out
+	return w.flush(true)
 }
 
-// writeEnding returns the last lap's audio and data that the next lap would
+// writeEnding writes the last lap's audio and data that the next lap would
 // have carried, to end a bounded run without cutting it.
-func (w *lapWriter) writeEnding() []byte {
-	var out []byte
-	w.times = w.times[:0]
+func (w *lapWriter) writeEnding() error {
 	w.placedPackets, w.placedBytes = w.placedPackets[:0], w.placedBytes[:0]
 	for s := range w.audioLaps {
 		w.collectAudio(s, w.audioLaps[s][0], 1)
@@ -290,21 +326,19 @@ func (w *lapWriter) writeEnding() []byte {
 	}
 	baseCount := w.seg.packetCount()
 	lapTime := w.seg.duration * pcrPerTick
-	w.timeBase = int64(w.lap) * lapTime
+	lapStart := int64(w.lap) * lapTime
 	t := int64(0)
 	for _, pp := range w.placedPackets {
-		out = append(out, w.placedBytes[pp.byteAt:pp.byteAt+PacketSize]...)
 		slot := min(pp.target, baseCount-1)
 		if w.seg.constantRate {
 			t = max(t, evenTime(slot, w.seg.lapPackets, lapTime))
 		} else {
 			t = max(t, w.seg.sendTimes[slot])
 		}
-		w.times = append(w.times, t)
-		w.patchPacket(packetAt(out, len(w.times)-1), t)
+		w.patchPacket(w.chunk.add(w.placedBytes[pp.byteAt:pp.byteAt+PacketSize], lapStart+t), t)
 	}
 	w.countMoved()
-	return out
+	return w.flush(true)
 }
 
 func (w *lapWriter) nextAudioLap(s, lap int) audioLap {

@@ -9,52 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- mp2ts-loop has a new engine. A lap is the source's own packets with only what a seam needs
-  patched: continuity counters continue in the source's own pattern, and the first and last audio
-  PES of a lap are cut on frame boundaries instead of being re-packetized one frame per PES
-- mp2ts-loop loops variable-rate streams, keeping their source timing, and keeps the PCR within
-  40 ms across the seam by turning null packets into PCR-only packets
-- mp2ts-loop chooses among loops by picture numbering at recovery points, an even DTS step across
-  the seam, whole frame periods, audio from the loop start, and a seam that needs no change of
-  output rate, before length; it looks at the PCR stretch between discontinuities a loop lies in
+- mp2ts-loop has a new engine: a lap is the source's own packets, with only what a seam needs
+  patched (continuity counters, PCR, timestamps, the first and last audio PES)
+- mp2ts-loop loops variable-rate streams with their source timing, and keeps the PCR within 40 ms
+  across the seam
+- mp2ts-loop ranks loops by picture numbering, DTS step, field order, whole frame periods, audio
+  and output rate at the seam before length, and never spans a PCR discontinuity
 - mp2ts-loop paces UDP output by the output PCR, and sends the PAT and PMT once before the first lap
-- mp2ts-loop moves the PES of data streams, such as SMPTE ST 2038 ANC, teletext and subtitles,
-  across the seam with the picture of their PTS, as it does audio, so each lap's pictures keep
-  their own ANC; a data stream whose PES have no PTS stays where the source sends it, with a
-  warning
-- mp2ts-loop loops audio and data over the PTS interval of the loop's pictures, from the earliest,
-  and a file that lacks a stream's audio or data at an end of the loop leaves that gap in every
-  lap, with a warning, instead of filling it from other pictures
-- mp2ts-loop `-m` defaults to one lap for file output, `-d` bounds the loop search, and the `-scan`
-  report has a new format with the access points, the chosen loop, the lap, continuity errors and
-  warnings; a stream that cannot be looped is reported with an error and exit status 1
+- mp2ts-loop moves the PES of data streams (SMPTE ST 2038 ANC, teletext, subtitles) across the
+  seam with the picture of their PTS, as it does audio
+- mp2ts-loop loops audio and data over the PTS interval of the loop's pictures, and warns of a gap
+  in every lap when the file lacks a stream's audio or data at an end of the loop
+- mp2ts-loop `-m` defaults to one lap for file output, `-d` bounds the loop search, and a stream
+  that cannot be looped gives an error and exit status 1
+- mp2ts-loop `-scan` report has a new format with the access points, the chosen loop, the lap,
+  continuity errors and warnings
 
 ### Added
 
 - mp2ts-loop loops AVC and HEVC streams without IDR or CRA from recovery point SEI, marked with
   `broken_link_flag` at the seam
-- mp2ts-loop reads E-AC-3, and cuts audio whose frames it does not parse (LATM, S302M, AC-4) on PES
-  boundaries
+- mp2ts-loop reads E-AC-3, and cuts audio whose frames it does not parse (LATM, S302M, AC-4, or a
+  PES damaged by a lost packet) on PES boundaries
 - mp2ts-loop `-o -` writes to stdout, `-ttl` sets the multicast TTL, `-q` silences the report, and
-  the input may be `-` for stdin
-- mp2ts-loop reports the source's continuity errors, warns about those inside the loop, replaces
-  packets without sync byte or with an oversized adaptation field by null packets, and warns when
-  the PAT lists more than one program (only the first is looped)
+  the input may be `-` for stdin or a named pipe
+- mp2ts-loop reports the source's continuity errors and those inside the loop, replaces corrupt
+  packets by null packets, and warns when the PAT lists more than one program
 - mp2ts-loop refuses content whose video or audio PES do not start at a TS packet, an ISDB-T BTS,
   a video DTS that counts pictures, and a PCR that does not keep time with the video
-- mp2ts-loop reads how interlaced pictures are shown: MPEG-2 field pictures, H.264 PAFF and H.265
-  field coding are paired into frames and never start or end a loop on a second field, the field
-  order and pulldown (`top_field_first`, `repeat_first_field`, H.264/H.265 `pic_struct`) must match
-  at both ends of a loop, so 3:2 pulldown loops hold whole cadence cycles, and both fields of an
-  H.265 frame coded as two CRA become BLA at the seam
-- mp2ts-loop detects the frame rate from how long pictures are shown (25 for 1080i25 field
-  pictures, 29.97 for 3:2 pulldown), and its `-scan` report gives a loop's frame periods and coded
-  pictures, and the video's field pictures, field order and pulldown pictures
+- mp2ts-loop pairs field pictures (MPEG-2, H.264 PAFF, H.265) into frames and keeps the field
+  order and pulldown cadence across the seam, so 3:2 pulldown loops hold whole cycles
+- mp2ts-loop detects the frame rate from how long pictures are shown, and its `-scan` report
+  gives the field pictures, field order and pulldown pictures
 
 ### Fixed
 
 - mp2ts-nallister, mp2ts-pslister and mp2ts-loop no longer panic on a corrupt HEVC slice header,
   with mp4ff v0.63.0. mp2ts-pslister shows the SPS fields that version adds
+- mp2ts-loop no longer repeats the payload of an audio packet that the source sends twice
 
 ## [0.4.0] - 2026-10-09
 

@@ -351,7 +351,7 @@ func (f *dataFit) placedByLap() bool { return f.keptInPlace == "" }
 // loopPlan is a loop: the packets [startPacket, endPacket) from one video
 // access point to a later one, played over and over.
 type loopPlan struct {
-	accessPoint  accessPoint
+	accessPoint  accessPoint // of the loop's first picture, where every lap starts
 	startPicture int
 	endPicture   int
 	startPacket  int
@@ -375,21 +375,20 @@ type loopPlan struct {
 	// windowTime is how long the window's packets take at their source timing, 27 MHz.
 	windowTime int64
 	// lapPackets is, for constant-rate input, the loop duration at the source
-	// rate in packets.
+	// rate in packets. The segment reaches it by adding or removing null packets
+	// at the end of the window, unless the window has too few.
 	lapPackets int
-	// outputPackets per lap: lapPackets, reached by adding or removing null
-	// packets at the end of the window, unless the window has too few.
-	outputPackets int
-	audio         []audioFit
-	data          []dataFit
-	scte35        []*LoopSCTE35
-	warnings      []string
+	audio      []audioFit
+	data       []dataFit
+	scte35     []*LoopSCTE35
+	warnings   []string
 }
 
 type loopCandidate struct {
 	start, end int // into the access point list
-	// numberingOK: a recovery-point loop starts each lap with the picture
-	// numbers the stream continues with; always true for IDR and IRAP loops.
+	// numberingOK: a loop that starts at a recovery point starts each lap with
+	// the picture numbers the stream continues with; always true for a loop that
+	// starts at an IDR or IRAP, which starts the numbering anew.
 	numberingOK bool
 	// dtsOK: the DTS steps across the seam within half a picture of its usual step.
 	dtsOK bool
@@ -635,12 +634,11 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 		return nil, fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
 
-	// A loop needs two access points of the class it starts on; prefer the
-	// cleanest. A second field is no loop point: the lap would start or end
-	// inside a frame.
+	// A loop needs two access points; prefer the cleanest class that has two,
+	// with those of a cleaner class among them. A second field is no loop point:
+	// the lap would start or end inside a frame.
 	pics := idx.pictures
 	var points []int
-	ap := apClosedGOP
 	for _, level := range []accessPoint{apClosedGOP, apOpenGOP, apRecoveryPoint} {
 		points = points[:0]
 		for i := range pics {
@@ -648,7 +646,6 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 				points = append(points, i)
 			}
 		}
-		ap = level
 		if len(points) >= 2 {
 			break
 		}
@@ -670,20 +667,23 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 		fieldPeriodsBefore[i+1] = fieldPeriodsBefore[i] + pics[i].info.fieldPeriods()
 	}
 
-	// Numbering decides between recovery-point loops only when two recovery
-	// points share one; otherwise no loop keeps it, and it must not hold the
-	// search open.
+	// A lap that starts at an IDR or IRAP starts the picture numbering anew; one
+	// that starts at a recovery point keeps it only when the picture after the
+	// loop has its numbers. Numbering decides between loops only when some loop
+	// keeps it: one that starts at an IDR or IRAP, or two recovery points that
+	// share their numbers. Otherwise it must not hold the search open.
+	startsAnew := func(p *videoPicture) bool { return p.info.accessPoint > apRecoveryPoint }
 	numberingMatters := false
-	if ap == apRecoveryPoint {
-		seen := make(map[pictureNumbering]bool)
-		for _, p := range points {
-			if n := pics[p].info.numbering; n != nil {
-				if seen[*n] {
-					numberingMatters = true
-					break
-				}
-				seen[*n] = true
-			}
+	seen := make(map[pictureNumbering]bool)
+	for k, p := range points {
+		if startsAnew(&pics[p]) {
+			// The last point starts no loop.
+			numberingMatters = numberingMatters || k+1 < len(points)
+			continue
+		}
+		if n := pics[p].info.numbering; n != nil {
+			numberingMatters = numberingMatters || seen[*n]
+			seen[*n] = true
 		}
 	}
 
@@ -755,7 +755,7 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 			return nil
 		}
 		c.dtsOK = absInt64(c.dtsStepError)*2 <= picturePeriod
-		c.numberingOK = !numberingMatters ||
+		c.numberingOK = !numberingMatters || startsAnew(start) ||
 			(start.info.numbering != nil && end.info.numbering != nil && *start.info.numbering == *end.info.numbering)
 		c.fieldsOK = start.info.cadence() == end.info.cadence()
 		// Whole frame periods by how long the pictures are shown, or by the coded
@@ -815,6 +815,19 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 			}
 		}
 	}
+	if evaluated == 0 && opts.maxDuration > 0 {
+		// The limit is shorter than any loop; the shortest are between neighbours.
+		closest := int64(math.MaxInt64)
+		for k := 1; k < len(points); k++ {
+			if d := pics[points[k]].pts - pics[points[k-1]].pts; d > 0 {
+				closest = min(closest, d)
+			}
+		}
+		if closest != math.MaxInt64 {
+			return nil, fmt.Errorf("no loop is as short as the limit of %d ms: the closest video access points are "+
+				"%.0f ms apart", opts.maxDuration/90, math.Ceil(float64(closest)/90))
+		}
+	}
 	if best == nil && (offClock != nil || offDTS != nil || shownAfterEnd) {
 		var problems []string
 		if offClock != nil {
@@ -839,7 +852,7 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 	}
 
 	plan := &loopPlan{
-		accessPoint:  ap,
+		accessPoint:  pics[points[best.start]].info.accessPoint,
 		startPicture: points[best.start],
 		endPicture:   points[best.end],
 		startPacket:  pics[points[best.start]].firstPacket,
@@ -872,18 +885,8 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 	plan.bitrate = float64(PacketSize*8) * pcrPerSec / stretch.ticksPerPacket
 	plan.deviation = stretch.deviation
 	plan.windowTime = timeline.at(stretch, plan.endPacket) - timeline.at(stretch, plan.startPacket)
-	windowPackets := plan.endPacket - plan.startPacket
-	plan.outputPackets = windowPackets
 	if plan.constantRate {
-		lapPackets := int(math.Round(float64(plan.duration*pcrPerTick) / stretch.ticksPerPacket))
-		removable := int(idx.nullsBefore[plan.endPacket] - idx.nullsBefore[plan.startPacket])
-		plan.lapPackets = lapPackets
-		plan.outputPackets = max(lapPackets, windowPackets-removable)
-		if plan.outputPackets > lapPackets {
-			plan.warnings = append(plan.warnings, fmt.Sprintf("the window has %d packets more than a lap holds at "+
-				"the source rate and too few null packets to drop; the output rate is %.3f%% higher",
-				plan.outputPackets-lapPackets, 100*float64(plan.outputPackets-lapPackets)/float64(lapPackets)))
-		}
+		plan.lapPackets = int(math.Round(float64(plan.duration*pcrPerTick) / stretch.ticksPerPacket))
 	} else {
 		plan.warnings = append(plan.warnings, fmt.Sprintf("variable-rate input (the PCR strays up to %.0f ms from a "+
 			"constant rate): packets keep their source timing, so a player must pace the output by its PCR",
@@ -902,6 +905,16 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 		if fit.frameCount == 0 {
 			plan.warnings = append(plan.warnings, fmt.Sprintf("audio PID %d: no audio near the loop; it is left out", pid))
 			continue
+		}
+		damaged := 0
+		for _, p := range idx.audio[s].pes[fit.firstPES : fit.firstPES+fit.pesCount] {
+			if p.damaged {
+				damaged++
+			}
+		}
+		if damaged > 0 && idx.audio[s].frameLevel {
+			plan.warnings = append(plan.warnings, fmt.Sprintf("audio PID %d: %d PES whose frames cannot be read are "+
+				"inside the loop and come back every lap", pid, damaged))
 		}
 		if fit.headGap > 0 {
 			plan.warnings = append(plan.warnings, fmt.Sprintf("audio PID %d: the file holds no audio for the first "+
@@ -970,7 +983,7 @@ func chooseLoop(idx *streamIndex, opts loopOptions) (*loopPlan, error) {
 	if !pics[plan.startPicture].info.parameterSets {
 		plan.warnings = append(plan.warnings, "the first picture of the loop carries no sequence parameters")
 	}
-	switch ap {
+	switch plan.accessPoint {
 	case apOpenGOP:
 		if idx.videoCodec == CODEC_HEVC {
 			plan.warnings = append(plan.warnings,

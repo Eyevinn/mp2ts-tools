@@ -50,7 +50,8 @@ type videoPicture struct {
 }
 
 // audioFrame is the smallest piece of audio a lap can end on: one coded frame,
-// or a whole PES for audio whose frames are not parsed.
+// or a whole PES for audio whose frames are not parsed and for a PES whose
+// frames cannot be read.
 type audioFrame struct {
 	start     int64 // unwrapped, in units of 1 / (90 kHz * timeScale)
 	duration  int64 // same unit
@@ -71,6 +72,9 @@ type audioPES struct {
 	frameCount  int
 	firstChunk  int // into audioStream.chunks
 	chunkCount  int
+	// damaged: its frames cannot be read, as after a lost packet, so it is one
+	// frame that lasts until the next PES.
+	damaged bool
 }
 
 type audioStream struct {
@@ -535,14 +539,18 @@ type audioAssembly struct {
 	headerSize int
 	bytes      []byte // payload after the PES header
 	endOffset  int
-	unparsable bool // frames straddle PES or the sample rate changes
-	pts        unwrapper
+	// damaged counts the PES whose frames cannot be read: they straddle PES,
+	// change sample rate, or a packet was lost.
+	damaged      int
+	firstDamaged int // packet
+	pts          unwrapper
 }
 
 type pidContinuity struct {
 	seen     bool
 	last     byte
-	repeated bool // the last packet was sent twice
+	repeated bool   // the last packet was sent twice
+	payload  []byte // of the last packet with payload
 }
 
 type misplacedPES struct {
@@ -560,6 +568,7 @@ type scanner struct {
 	audio          []audioAssembly
 	data           []dataAssembly
 	scte35         map[int]*sectionAssembler
+	duplicate      bool // the packet being added repeats its PID's previous one
 	pcrUnwrap      unwrapper
 	videoPTS       unwrapper
 	videoDTS       unwrapper
@@ -654,13 +663,16 @@ func (s *scanner) addPacket(i int, b []byte) {
 
 // checkContinuity follows ISO/IEC 13818-1 2.4.3.3: the counter steps by one on
 // each packet with payload, a packet may be sent twice in a row, and a
-// discontinuity_indicator lets it start anew.
+// discontinuity_indicator lets it start anew. It sets s.duplicate for a packet
+// sent twice: its payload is the previous packet's and must be read only once.
 func (s *scanner) checkContinuity(i, pid int, b []byte) {
+	s.duplicate = false
 	if tsTransportErr(b) || !tsHasPayload(b) {
 		return
 	}
 	c := &s.continuity[pid]
 	cc := tsCC(b)
+	payload := b[tsPayloadOffset(b):]
 	restarted := tsAFFlags(b)&afFlagDiscontinuity != 0
 	repeated := false
 	if c.seen && !restarted && cc != (c.last+1)&0x0f {
@@ -669,7 +681,8 @@ func (s *scanner) checkContinuity(i, pid int, b []byte) {
 			s.idx.continuityErrors = append(s.idx.continuityErrors, continuityError{packet: i, pid: pid})
 		}
 	}
-	*c = pidContinuity{seen: true, last: cc, repeated: repeated}
+	s.duplicate = repeated && bytes.Equal(payload, c.payload)
+	*c = pidContinuity{seen: true, last: cc, repeated: repeated, payload: payload}
 }
 
 // checkPESStart checks that each payload unit of an elementary stream starts
@@ -705,7 +718,7 @@ func (s *scanner) trackUnits(i, pid int, b []byte) {
 }
 
 func (s *scanner) addVideoPacket(i int, b []byte) {
-	if !tsHasPayload(b) {
+	if !tsHasPayload(b) || s.duplicate {
 		return
 	}
 	if !tsPUSI(b) {
@@ -748,7 +761,9 @@ func (s *scanner) finishVideoPES() {
 func (s *scanner) addAudioPacket(slot, i int, b []byte) {
 	a := &s.audio[slot]
 	st := &s.idx.audio[slot]
-	if !tsHasPayload(b) {
+	// A lap counts its audio packets afresh, so a packet sent twice would be
+	// two packets of payload there: it is left out.
+	if !tsHasPayload(b) || s.duplicate {
 		return
 	}
 	off := tsPayloadOffset(b)
@@ -790,7 +805,7 @@ func (s *scanner) finishAudioPES(slot int, endOfStream bool) {
 	a.open = false
 	pes := &st.pes[len(st.pes)-1]
 	pes.chunkCount = len(st.chunks) - pes.firstChunk
-	if st.codec == audioUnknown || a.unparsable {
+	if st.codec == audioUnknown {
 		return
 	}
 	payload := a.bytes
@@ -798,18 +813,23 @@ func (s *scanner) finishAudioPES(slot int, endOfStream bool) {
 	elapsed := int64(0)
 	for off < len(payload) {
 		h, ok := parseAudioFrameHeader(st.codec, payload[off:])
-		if !ok || off+h.size > len(payload) {
-			// A frame that continues in the next PES, or junk; the last PES of the
-			// file may just be cut short.
-			a.unparsable = !endOfStream
+		if !ok || off+h.size > len(payload) || (st.sampleRate != 0 && h.sampleRate != st.sampleRate) {
+			// A frame that continues in the next PES, another sample rate, or
+			// what a lost packet leaves. The last PES of the file may just be cut
+			// short, and keeps the frames before the cut.
+			if !endOfStream {
+				if a.damaged == 0 {
+					a.firstDamaged = pes.firstPacket
+				}
+				a.damaged++
+				pes.damaged = true
+				// One frame, whose start and duration finalizeAudio sets.
+				st.frames = append(st.frames[:pes.firstFrame], audioFrame{endOffset: a.endOffset})
+			}
 			break
 		}
 		if st.sampleRate == 0 {
 			st.sampleRate, st.timeScale = h.sampleRate, int64(h.sampleRate)
-		}
-		if h.sampleRate != st.sampleRate {
-			a.unparsable = true
-			break
 		}
 		end := a.headerSize + off + h.size
 		if h.sameTimeAsPrevious && len(st.frames) > pes.firstFrame {
@@ -824,12 +844,30 @@ func (s *scanner) finishAudioPES(slot int, endOfStream bool) {
 	pes.frameCount = len(st.frames) - pes.firstFrame
 }
 
-// finalizeAudio cuts audio whose frames cannot be followed at PES boundaries
-// instead, with each PES lasting until the next one starts.
+// finalizeAudio makes each PES whose frames cannot be read one frame that lasts
+// until the next PES starts: a lap ends before or after it, as after a lost
+// packet. When that is most PES, the frames cannot be followed at all, and the
+// whole stream is cut at PES boundaries instead.
 func (s *scanner) finalizeAudio(slot int) {
 	st := &s.idx.audio[slot]
-	st.frameLevel = st.codec != audioUnknown && !s.audio[slot].unparsable && len(st.frames) > 0
+	a := &s.audio[slot]
+	st.frameLevel = st.codec != audioUnknown && len(st.frames) > a.damaged && 2*a.damaged <= len(st.pes)
 	if st.frameLevel {
+		for i := range st.pes {
+			p := &st.pes[i]
+			if !p.damaged {
+				continue
+			}
+			f := &st.frames[p.firstFrame]
+			f.start = p.pts * st.timeScale
+			if next := p.firstFrame + 1; next < len(st.frames) {
+				f.duration = max(st.frames[next].start-f.start, 0)
+			}
+		}
+		if a.damaged > 0 {
+			s.idx.warnings = append(s.idx.warnings, fmt.Sprintf("audio PID %d: the frames of %d of %d PES cannot be "+
+				"read, the first at packet %d; no lap ends inside them", st.pid, a.damaged, len(st.pes), a.firstDamaged))
+		}
 		return
 	}
 	if st.codec != audioUnknown {
@@ -855,7 +893,9 @@ func (s *scanner) finalizeAudio(slot int) {
 func (s *scanner) addDataPacket(slot, i int, b []byte) {
 	a := &s.data[slot]
 	st := &s.idx.data[slot]
-	if !tsHasPayload(b) || st.timing != dataByPTS {
+	// As for audio, a packet sent twice is left out: a lap counts the packets
+	// it places afresh.
+	if !tsHasPayload(b) || s.duplicate || st.timing != dataByPTS {
 		return
 	}
 	off := tsPayloadOffset(b)
